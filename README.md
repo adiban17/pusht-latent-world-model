@@ -1,0 +1,1 @@
+# pusht-latent-world-model
