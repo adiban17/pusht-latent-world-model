@@ -1,0 +1,10 @@
+.venv/
+outputs/
+store/
+wandb/
+results_bundle.zip
+*.npz
+*.pt
+__pycache__/
+*.egg-info/
+.pytest_cache/

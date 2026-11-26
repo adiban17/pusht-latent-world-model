@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pusht-latent-world-model"
+version = "0.1.0"
+description = "Action-conditioned latent world model + CEM planning on PushT from pixels"
+requires-python = ">=3.10"
+# torch/torchvision are deliberately NOT core deps: Kaggle/Colab ship CUDA builds.
+dependencies = [
+    "numpy",
+    "gymnasium",
+    "gym-pusht",
+    # gym-pusht pulls opencv-python<5; both share the cv2 folder, so keep them on the same major.
+    "opencv-python-headless<5",
+    "imageio",
+    "matplotlib",
+    "pyyaml",
+    "scipy",
+    "wandb",
+]
+
+[project.optional-dependencies]
+local = ["torch"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["wm*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
