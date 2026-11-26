@@ -43,3 +43,24 @@ def test_subset_is_fixed_and_sorted():
     a = subset(torch.arange(100), 10, seed=3)
     assert torch.equal(a, subset(torch.arange(100), 10, seed=3)) and torch.equal(a, a.sort().values)
     assert len(subset(torch.arange(5), 10)) == 5
+
+
+def test_imagined_probe_and_pusher_errors():
+    from wm.eval.diagnose import imagined_probe, pusher_errors
+
+    rng = np.random.default_rng(0)
+    n_frames, c = 40, 3
+    s = np.zeros((n_frames, 5), np.float32)
+    s[:, :4] = rng.uniform(50, 460, (n_frames, 4))
+    s[:, 4] = rng.uniform(-np.pi, np.pi, n_frames)
+    feats = torch.from_numpy(state_targets(s)).float()     # latent = the target itself
+    w = fit_ridge(feats, state_targets(s), lam=1e-8)
+    starts = np.array([0, 5, 10])
+    z = torch.stack([feats[st:st + 13] for st in starts])  # [3, 13, 6]
+    z_hat = z[:, c:]                                       # perfect imagination
+    out = imagined_probe(w, starts, z, z_hat, s, c, (1, 10))
+    assert out["k10"]["imagined"]["block_px_mean"] < 1e-3 and out["k10"]["real_z"]["block_px_mean"] < 1e-3
+    assert out["k10"]["copy_last"]["block_px_mean"] > 1.0
+    p_hat = torch.from_numpy(s[starts[:, None] + c + np.arange(10), :2] / 256.0 - 1.0)
+    pe = pusher_errors(p_hat, starts, s, c, (10,))
+    assert pe["k10"]["p_hat_mean"] < 1e-3 and pe["k10"]["copy_last_mean"] > 1.0

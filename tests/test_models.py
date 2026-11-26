@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from wm.models.encoder import latent_norm
@@ -91,3 +92,92 @@ def test_variance_term_only_in_loss_when_weighted():
     on = m.window_loss(frames, actions, {**w, "var": 1.0})
     assert off["var"] > 0.5                                  # near-collapsed at init
     assert torch.allclose(on["loss"], off["loss"] + on["var"])
+
+
+# ---- Phase 3b options ------------------------------------------------------------------------
+from wm.models.world_model import EXPECTED_PARAMS_PROPRIO  # noqa: E402
+
+
+def test_phase3b_flags_default_off_and_absent_from_wm_yaml():
+    m = build_world_model(CFG)
+    assert m.fg_mean is None and not m.proprio and not hasattr(m.dynamics, "p_out")
+    for k in ("fg_weight", "fg_alpha", "fg_threshold", "proprio", "keep_best"):
+        assert k not in CFG
+    assert "proprio" not in CFG["loss"]
+
+
+def test_proprio_param_counts():
+    m = build_world_model({**CFG, "proprio": True})
+    counts = param_counts(m)
+    assert counts == EXPECTED_PARAMS_PROPRIO
+    assert counts["total"] == 4_186_053 and counts["planner"] == 2_443_490
+    assert counts["dynamics"] - EXPECTED_PARAMS["dynamics"] == 2 * 256 + (320 * 2 + 2)
+    assert not m.dynamics.p_out.weight.any() and not m.dynamics.p_out.bias.any()   # zero init
+
+
+def test_fg_weight_alpha_zero_equals_unweighted_and_matches_hand_computation():
+    torch.manual_seed(0)
+    frames = torch.full((1, 13, 3, 64, 64), 0.5)          # white background
+    frames[..., 10:20, 10:20] = -0.5                       # a 10x10 black square
+    actions = torch.zeros(1, 12, 2)
+    w = {"rec": 1.0, "lat": 0.1, "img": 1.0}
+    plain = WorldModel()
+    ref = plain.window_loss(frames, actions, w)
+    m0 = WorldModel(fg_weight=True, fg_alpha=0.0)
+    m0.load_state_dict({**plain.state_dict(), "fg_mean": torch.full((3, 64, 64), 0.5)})
+    out0 = m0.window_loss(frames, actions, w)
+    assert torch.allclose(out0["rec"], ref["rec"]) and torch.allclose(out0["img"], ref["img"])
+
+    m = WorldModel(fg_weight=True, fg_alpha=20.0)
+    m.load_state_dict(m0.state_dict())
+    out = m.window_loss(frames, actions, w)
+    weight = torch.ones(64, 64)
+    weight[10:20, 10:20] = 21.0
+    dec = plain.decode(ref["z"]).float()
+    hand = (weight * (dec - frames) ** 2).mean()
+    assert torch.allclose(out["rec"], hand, rtol=1e-5)
+    assert param_counts(m) == EXPECTED_PARAMS and "fg_mean" in m.state_dict()
+
+
+def test_proprio_rollout_api_and_loss():
+    torch.manual_seed(0)
+    m = WorldModel(proprio=True)
+    with torch.no_grad():                                  # non-zero head so p actually moves
+        m.dynamics.p_out.weight.normal_(0, 0.01)
+    z_ctx, a_ctx, p_ctx = torch.randn(5, 2, 256), torch.rand(5, 2, 2) * 2 - 1, torch.rand(5, 2, 2) * 2 - 1
+    h = m.warmup(z_ctx, a_ctx, p_ctx)
+    acts, z0, p0 = torch.rand(5, 10, 2) * 2 - 1, torch.randn(5, 256), torch.rand(5, 2) * 2 - 1
+    z_hat, p_hat = m.rollout(z0, h, acts, p0=p0)
+    assert z_hat.shape == (5, 10, 256) and p_hat.shape == (5, 10, 2)
+    z1, p1 = m.rollout(z0[:1], h[:1], acts[:1], p0=p0[:1])
+    assert torch.allclose(z1, z_hat[:1], atol=1e-5) and torch.allclose(p1, p_hat[:1], atol=1e-6)
+    with pytest.raises(ValueError):
+        m.rollout(z0, h, acts)
+    with pytest.raises(ValueError):
+        m.warmup(z_ctx, a_ctx)
+
+    frames, actions = torch.rand(2, 13, 3, 64, 64) - 0.5, torch.rand(2, 12, 2) * 2 - 1
+    pusher = torch.rand(2, 13, 2) * 2 - 1
+    w = {"rec": 1.0, "lat": 0.1, "img": 1.0, "proprio": 1.0}
+    with pytest.raises(ValueError):
+        m.window_loss(frames, actions, w)
+    out = m.window_loss(frames, actions, w, pusher=pusher)
+    assert out["p_hat"].shape == (2, 10, 2)
+    assert torch.allclose(out["proprio"], ((out["p_hat"] - pusher[:, 3:]) ** 2).mean())
+    assert torch.allclose(out["loss"], out["rec"] + 0.1 * out["lat"] + out["img"] + out["proprio"])
+    out["loss"].backward()
+    assert m.dynamics.p_out.weight.grad.abs().sum() > 0
+
+
+def test_proprio_teacher_forcing_feeds_real_pusher():
+    torch.manual_seed(0)
+    m = WorldModel(proprio=True, teacher_forcing=True)
+    with torch.no_grad():
+        m.dynamics.p_out.weight.normal_(0, 0.01)
+    frames, actions = torch.rand(1, 13, 3, 64, 64) - 0.5, torch.rand(1, 12, 2) * 2 - 1
+    pusher = torch.rand(1, 13, 2) * 2 - 1
+    out = m.window_loss(frames, actions, {"rec": 1.0, "lat": 0.1, "img": 1.0}, pusher=pusher)
+    # one-step predictions from the real pusher: p_hat_{k+1} - p_k is the head output only
+    h = m.warmup(out["z"][:, :2], actions[:, :2], pusher[:, :2])
+    z_k, p_k, _ = m.dynamics.step_proprio(out["z"][:, 2], pusher[:, 2], actions[:, 2], h)
+    assert torch.allclose(out["p_hat"][:, 0], p_k)

@@ -1,13 +1,14 @@
 # PROGRESS
 
-**Current phase: 4 — Baselines (done locally; Aditya to push after `train_wm` full finishes, run Kaggle `diagnose_wm`, then `train_baselines` smoke, then full).** Phase 3 `train_wm` full is running on Kaggle.
+**Current phase: 3b — world-model fixes (done locally; Aditya to push, then run Kaggle `wm_ablate` smoke, then full).** Phase 3 `train_wm` full finished on Kaggle (`ckpt-wm:v5`); Phase 4 `train_baselines` on Kaggle waits until the 3b winner is chosen.
 
 ## Status
 | Phase | Status | Local smoke | Kaggle smoke | Kaggle full |
 | --- | --- | --- | --- | --- |
 | 1 Foundation | done | PASS | PASS | n/a |
 | 2 Expert + data | **complete** | PASS | PASS | PASS |
-| 3 World model | Kaggle full running | PASS | pending | running |
+| 3 World model | Kaggle full done (v1) | PASS | pending | PASS |
+| 3b WM fixes | done locally | PASS | pending | pending |
 | 4 Baselines | done locally | PASS | pending | pending |
 | 5 Rollout eval | not started | – | – | – |
 | 6 Planner | not started | – | – | – |
@@ -61,47 +62,61 @@
 - **diagnose_wm (Phase 3 add-on, eval only):** job registered under Phase 3 (needs `pusht-data`, `ckpt-wm`; `config: null`, `makes: []`, so it never skips and never touches the store). It pulls the finished `ckpt-wm` (smoke falls back to `ckpt-wm-smoke`) and reports, train episodes vs val episodes (190–199): each loss term on 256 fixed windows per split (+ open-loop NMSE_k); single-frame encode→decode MSE on all pixels and on non-background pixels (any channel differs from the train mean frame by > 0.1, i.e. ~25/255), next to the mean-frame MSE on the same pixels; a ridge probe z → state (λ = 1.0, unpenalised bias, fit on ≤ 4,096 train frames, targets as the §7 probe incl. block CoG) on val frames and on imagined latents at k = 1, 5, 10 (beside real z_{t+k} and copy-last z_t); and a filmstrip of 8 val reconstructions. Writes `diagnose_wm.json` + `recon_filmstrip_val.png` to `outputs/diagnose_wm/` (and the filmstrip to W&B). Note: `var` is a batch statistic, computed over chunks of 64 windows (13·64 latents), as in validation.
 - **§3 termination:** never end an episode early; step all 100 actions even if `terminated`. (gym-pusht 0.1.8's `step()` does keep working after termination.) If it ever refuses, replace that episode with an extra train seed from 2000 upwards. Validation is always seeds 190–199; test is always 1000–1029.
 
+- **Kaggle `train_wm` full (Phase 3, v1):** finished: `ckpt-wm:v5`, step 30000, git 5dedc02, 37m15s, val NMSE@10 0.168 vs copy-last 0.230.
+- **Kaggle `diagnose_wm` on `ckpt-wm` v1 (as pasted by Aditya):** ridge probe z → state on val: pusher 74.8 px (predict-mean 146.5), block 15.4 px, angle 68.2°; on train pusher 70.7 px, so the pusher is missing from z, not overfit. Non-background pixels = 3.6% of the image. NMSE@10 train 0.030 vs val 0.168 (copy-last 0.371 / 0.230). Imagined block error on val at k = 10: 29.5 px vs copy-last 29.8 px. Val loss 0.346, of which 0.336 is the variance term.
+- **Phase 3b options (all off by default; `wm.yaml` / `wm_1step.yaml` unchanged, `train_wm` hash still `d2385fb211c8`, v1 smoke logs and weights bit-identical to commit d861a67):**
+  - **(A) `fg_weight`:** rec and img losses = element mean of `w·(D(z) − o)²`, `w = 1 + α·mask`, α = 20, mask = any channel of |frame − train mean frame| > 25/255 (mean frame computed once from train frames, stored as buffer `fg_mean` in model.pt). No renormalisation by mean(w).
+  - **(B) `proprio`:** pusher position p (`states[:, :2]/256 − 1`) is model state. φ = Linear(256+2+2 → 256) on [z, p, a]; new head `p_out = Linear(320 → 2)`, `p' = p + p_out(h')`; loss term `proprio` = MSE(p̂_{t+1..t+10}, p), weight 1.0. Warm-up uses real p; rollouts feed back p̂; decoder is still D(z). API: `warmup(z, a, p_ctx)`, `rollout(z0, h, a, p0=...) -> (z_hat, p_hat)`. **Params: dynamics 704,514, total 4,186,053, planner 2,443,490** (encoder/decoder unchanged).
+  - **`p_out` is zero-initialised** (so p̂ starts as copy-last). Local check, not a result (`scripts/check_proprio_init.py`, smoke data, 200 steps, batch 8): val NMSE@10 at step 200 = A 0.056, AB random-init 0.222, AB zero-init 0.072. The random head's large early pusher error dominated the clipped gradient.
+  - **(C) `keep_best`:** `train_loop(select=...)` keeps the weights with the lowest val NMSE@10 (saved in checkpoints under `best`, restored on resume); the final artifact uses them and records `best_step`, `best_nmse10`, `last_nmse10`.
+- **`wm_ablate` (Phase 3b job):** variants = `configs/wm.yaml` + flags, 5,000 steps (warm-up 500, cosine), val every 250, same seed and identical batches. **Three runs, four rows:** v1, A, and AB trained once with keep_best; its last weights are row "A+B", its best-NMSE@10 weights row "A+B+C". All metrics on val episodes (256 fixed windows, all val frames): NMSE@5/@10 vs copy-last (each normalised by its own latent spread, so not compared across rows), ridge probe (λ = 1, ≤ 4,096 train frames) on real z and on imagined z at k = 10 vs copy-last, p̂ pusher px at k = 10 for B rows, non-background recon MSE (0.1 mask as in diagnose_wm), it/s. Writes `ablation_wm_fixes.json` + recon filmstrips; full mode also writes `results/ablation_wm_fixes.json` in the Kaggle checkout; pushes `results-wm-ablate` after each run so a rerun skips finished runs.
+- **Pre-registered `wm_ablate` selection rule (2026-11-26, before any Kaggle result; implemented in `wm_ablate.select_winner`):** the winner is the row with the lowest imagined block px at k = 10 on val that (a) beats copy-last on block px at k = 10 AND (b) has imagined angle error at k = 10 no worse than copy-last's. If no row satisfies both, report that plainly and pick the lowest block px among rows satisfying (a). Tie-break (within 1 px): lower pusher error, using p̂ at k = 10 for B rows and the ridge pusher px on real z otherwise. Errors are means over val windows; imagined angle at k = 10 is in the table for every row.
+- **Note for Phase 6 (not built):** with proprio, the planner's goal cost uses only the image latent z_g (the goal is an image), not the goal pusher position.
+
 ## Installed versions (local)
 python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, pygame 2.6.1, opencv-python(-headless) 4.14.0.94, numpy 2.5.5, wandb 0.31.2.
 
 ## Open issues
+- Kaggle v1 val loss is almost all variance hinge (0.336 of 0.346): val latents are far less spread per dimension than train ones. `wm_ablate` reports z_std per row; revisit after it.
+- Getting `results/ablation_wm_fixes.json` into the repo: the Kaggle run writes it to `/kaggle/working/pusht-latent-world-model/results/` and to the W&B artifact `results-wm-ablate`; Aditya downloads that one file from the Kaggle output and drops it in `results/`.
 - The local smoke filmstrip's decoded row is still a blur (50 steps, batch 4, CPU); judge the decoder on the Kaggle full run.
 - Local `projected_30k_steps` (2h07m) is CPU at batch 4; the real projection comes from the Kaggle smoke.
 - **Phase 4 Kaggle budget:** `train_baselines` full = wm_1step 30k + pixel 30k + BC 20k (batch 256 × 4 images) + probe 10k steps in one group. The Kaggle smoke's four `projected_*` lines tell us whether it fits one 12 h session; if not, rerunning the same cell skips finished jobs and resumes the unfinished one from its last checkpoint.
 - BC smoke `val_z_std` = 0.006 (50 CPU steps). No CHECK by design; watch it on the Kaggle full run.
 - **Mac only:** on import, macOS prints `objc ... Class SDL... is implemented in both cv2/.dylibs/libSDL2 and pygame/.dylibs/libSDL2` to stderr, because both OpenCV wheels bundle SDL2 on macOS. It's harmless with `SDL_VIDEODRIVER=dummy` and all tests pass. It doesn't occur on Kaggle/Colab (Linux).
 
-## Last REPORT (local smoke, diagnose_wm)
+## Last REPORT (local smoke, wm_ablate)
 ```
 ==================== RUN REPORT ====================
-job: diagnose_wm   mode: smoke   platform: local   device: cpu
-git: 8bdbfee-dirty   time: 11.1s   params: 4,184,899
+job: wm_ablate   mode: smoke   platform: local   device: cpu
+git: d861a67-dirty   time: 51.6s   params: v1 4,184,899 / A 4,184,899 / AB 4,186,053
 CHECKS
- [PASS] ckpt_complete: ckpt-wm-smoke step 50 (complete: true)
  [PASS] metrics_finite: all finite (no NaN/inf)
+ [PASS] param_counts_v1: total 4,184,899 / planner 2,442,336 (== CLAUDE.md §4)
+ [PASS] param_counts_A: total 4,184,899 / planner 2,442,336 (== CLAUDE.md §4)
+ [PASS] param_counts_AB: total 4,186,053 / planner 2,443,490 (== CLAUDE.md §4 + proprio)
+ [PASS] z_std_v1: 0.808 (> 0.1, collapse alarm; WARN only in the ablation)
+ [PASS] z_std_A: 0.831 (> 0.1, collapse alarm; WARN only in the ablation)
+ [PASS] z_std_A+B: 0.817 (> 0.1, collapse alarm; WARN only in the ablation)
+ [PASS] z_std_A+B+C: 0.817 (> 0.1, collapse alarm; WARN only in the ablation)
 METRICS
- ckpt = ckpt-wm-smoke (step 50, git 33e7fa9-dirty)
  data = pusht-data-smoke
  val_source = train episode seed 1 (smoke: no val episodes)
- windows = train 178 / val 89
- loss_terms_train = loss 0.5370 rec 0.0212 lat 0.1428 img 0.0204 var 0.4812
- loss_terms_val = loss 0.6585 rec 0.0216 lat 0.1291 img 0.0213 var 0.6027
- nmse_train = k1 0.011 (copy 0.009) / k5 0.145 (copy 0.136) / k10 0.431 (copy 0.430)
- nmse_val = k1 0.008 (copy 0.006) / k5 0.131 (copy 0.115) / k10 0.393 (copy 0.379)
- recon_train = mse 0.02107 / non-background 0.05755 (mean-frame 0.05963; 5.2% of pixels; 202 frames)
- recon_val = mse 0.02134 / non-background 0.06015 (mean-frame 0.06138; 5.9% of pixels; 101 frames)
- ridge_train_fit = pusher 14.7 px / block 3.3 px / angle 3.3 deg (medians 10.3 / 2.7 / 2.0)
- ridge_val = pusher 15.6 px / block 2.7 px / angle 3.3 deg (medians 9.1 / 2.1 / 1.8)
- ridge_val_predict_mean = pusher 132.6 px / block 120.5 px / angle 61.6 deg (medians 132.8 / 131.7 / 40.4)
- ridge_imagined_train_k1 = block 7.4 px / 5.1 deg, pusher 20.3 px (real z: 3.0 px / 2.5 deg / 13.9 px; copy-last: 5.2 px / 3.8 deg / 18.2 px)
- ridge_imagined_train_k5 = block 32.6 px / 20.3 deg, pusher 61.6 px (real z: 2.9 px / 2.6 deg / 12.9 px; copy-last: 17.1 px / 11.3 deg / 40.9 px)
- ridge_imagined_train_k10 = block 61.4 px / 36.6 deg, pusher 111.3 px (real z: 2.8 px / 3.5 deg / 12.7 px; copy-last: 32.9 px / 20.7 deg / 69.8 px)
- ridge_imagined_val_k1 = block 7.2 px / 3.8 deg, pusher 22.2 px (real z: 2.4 px / 1.6 deg / 14.0 px; copy-last: 5.2 px / 2.9 deg / 20.0 px)
- ridge_imagined_val_k5 = block 33.6 px / 11.9 deg, pusher 63.6 px (real z: 2.3 px / 1.8 deg / 12.4 px; copy-last: 19.4 px / 10.2 deg / 46.6 px)
- ridge_imagined_val_k10 = block 62.6 px / 22.1 deg, pusher 113.7 px (real z: 2.1 px / 3.5 deg / 12.0 px; copy-last: 39.0 px / 20.2 deg / 80.0 px)
+ steps = 50 per run (batch 4), same seed and batches
+ val_windows = 16
+ table = nmse@5 (copy) | nmse@10 (copy) | ridge real z: block px / angle / pusher px | imagined@10 block px (copy) | angle deg (copy) | pusher px (copy) | p_hat@10 px (copy) | recon fg mse | it/s
+ v1     = 0.174 (0.171) | 0.434 (0.477) | 2.7 / 3.3 / 15.6 | 58.2 (37.0) | 20.3 (20.2) | 102.4 (81.1) | n/a (n/a) | 0.06015 | 4.03
+ A      = 0.173 (0.182) | 0.425 (0.507) | 2.6 / 3.5 / 15.3 | 55.8 (37.0) | 15.9 (20.1) | 88.5 (81.1) | n/a (n/a) | 0.02410 | 3.75
+ A+B    = 0.163 (0.156) | 0.413 (0.449) | 2.6 / 3.4 / 15.2 | 46.6 (36.6) | 30.7 (20.1) | 137.4 (80.5) | 39.1 (75.9) | 0.02414 | 3.93
+ A+B+C  = 0.163 (0.156) | 0.413 (0.449) | 2.6 / 3.4 / 15.2 | 46.6 (36.6) | 30.7 (20.1) | 137.4 (80.5) | 39.1 (75.9) | 0.02414 | 3.93
+ run_v1 = 4.03 it/s, projected 30k steps 2h03m59s, trained in 16.8s
+ run_A = 3.75 it/s, projected 30k steps 2h13m24s, trained in 14.7s
+ run_AB = 3.93 it/s, projected 30k steps 2h07m08s, trained in 14.2s
+ keep_best = best step 50 of 50 (val nmse@10 best 0.413 vs last 0.413)
+ winner = none (NO row beats copy-last on imagined block px at k=10)
 SAVED
- outputs/diagnose_wm/diagnose_wm.json
- outputs/diagnose_wm/recon_filmstrip_val.png
+ outputs/wm_ablate/artifact/ablation_wm_fixes.json
+ store/results-wm-ablate-smoke
 W&B: off
 ====================================================
 ```

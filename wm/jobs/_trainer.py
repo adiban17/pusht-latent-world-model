@@ -56,6 +56,7 @@ class TrainingJob:
         seed_all(self.cfg["seed"])
         self.counts: dict[str, int] = {}
         self.data_name = ""
+        self.extra_info: dict[str, Any] = {}   # e.g. best_step (keep_best), saved with model.pt
 
         self.art_dir = ctx.out_dir / "artifact"
         if self.art_dir.exists():
@@ -82,7 +83,8 @@ class TrainingJob:
         """Reproducibility info saved with every checkpoint (CLAUDE.md hard rule 5)."""
         return {"step": step, "config": self.cfg, "train_config": self.tcfg,
                 "config_hash": self.ctx.config_hash, "git": self.ctx.git, "params": self.counts,
-                "data": self.data_name, "wall_clock_s": self.elapsed_before + time.time() - self.t0}
+                "data": self.data_name, "wall_clock_s": self.elapsed_before + time.time() - self.t0,
+                **self.extra_info}
 
     # ---- callbacks for train_loop --------------------------------------------------------
     def on_checkpoint(self, state: dict[str, Any]) -> None:

@@ -68,22 +68,30 @@ class WindowData:
         self.frames = torch.from_numpy(arrays["frames"]).to(self.device)            # uint8
         acts = arrays["actions"].astype(np.float32) / 256.0 - 1.0                   # normalize_pos
         self.actions = torch.from_numpy(acts).to(self.device)
+        self.pusher = None                                        # proprio (Phase 3b B)
+        if "states" in arrays:
+            pusher = arrays["states"][:, :2].astype(np.float32) / 256.0 - 1.0      # normalize_pos
+            self.pusher = torch.from_numpy(pusher).to(self.device)
         self.offsets = torch.arange(window, device=self.device)
 
-    def gather(self, starts: torch.Tensor, length: int | None = None) -> tuple[torch.Tensor, torch.Tensor]:
-        """Window start indices [B] -> frames [B, L, 3, 64, 64] float, actions [B, L-1, 2].
+    def gather(self, starts: torch.Tensor, length: int | None = None,
+               pusher: bool = False) -> tuple[torch.Tensor, ...]:
+        """Window start indices [B] -> frames [B, L, 3, 64, 64] float, actions [B, L-1, 2]
+        (+ normalised pusher positions [B, L, 2] if `pusher`).
 
         L = the sampler's window unless `length` is given (e.g. 13-frame val rollouts of the
         4-frame pixel sampler); the caller makes sure such windows fit in their episode.
         """
         offsets = self.offsets if length is None else torch.arange(length, device=self.device)
         idx = starts.to(self.device)[:, None] + offsets
-        return frames_to_model(self.frames[idx]), self.actions[idx[:, :-1]]
+        out = (frames_to_model(self.frames[idx]), self.actions[idx[:, :-1]])
+        return (*out, self.pusher[idx]) if pusher else out
 
-    def sample(self, batch: int, generator: torch.Generator) -> tuple[torch.Tensor, torch.Tensor]:
+    def sample(self, batch: int, generator: torch.Generator,
+               pusher: bool = False) -> tuple[torch.Tensor, ...]:
         """Random train windows; the (CPU) generator makes batches reproducible and resumable."""
         pick = torch.randint(len(self.train_starts), (batch,), generator=generator)
-        return self.gather(self.train_starts[pick])
+        return self.gather(self.train_starts[pick], pusher=pusher)
 
     def fixed_val_starts(self, n: int, seed: int = 0) -> torch.Tensor:
         """A fixed, seeded subset of n val window starts (all of them if fewer), sorted."""

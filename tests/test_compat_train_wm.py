@@ -27,3 +27,12 @@ def test_train_wm_entry_and_artifact_unchanged():
     assert entry == {"phase": 3, "module": "wm.jobs.train_wm", "config": "configs/wm.yaml",
                      "needs": ["pusht-data"], "makes": ["ckpt-wm"]}
     assert job.ARTIFACT == "ckpt-wm"
+
+
+def test_wm_yaml_has_no_phase3b_flags():
+    from wm.repro import load_yaml
+
+    for name in ("wm.yaml", "wm_1step.yaml"):
+        cfg = load_yaml(REPO_ROOT / "configs" / name)
+        assert not {"fg_weight", "fg_alpha", "fg_threshold", "proprio", "keep_best"} & set(cfg), name
+        assert "proprio" not in cfg["loss"], name

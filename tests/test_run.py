@@ -12,7 +12,7 @@ spec.loader.exec_module(run)
 def test_registry_well_formed():
     reg = run.load_registry()
     assert set(reg["jobs"]) == {
-        "env_check", "collect_data", "train_wm", "diagnose_wm", "train_wm_1step", "train_pixel", "train_bc",
+        "env_check", "collect_data", "train_wm", "diagnose_wm", "wm_ablate", "train_wm_1step", "train_pixel", "train_bc",
         "train_probe", "eval_rollouts", "plan_val", "plan_sweep", "final_eval", "make_report",
     }
     for name, entry in reg["jobs"].items():

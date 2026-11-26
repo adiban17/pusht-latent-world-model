@@ -15,9 +15,9 @@ import torch
 from wm.data.windows import WindowData
 from wm.jobs import JobContext
 from wm.jobs._trainer import TrainingJob, check_param_counts, load_npz, same_outputs
-from wm.models.world_model import EXPECTED_PARAMS, build_world_model, param_counts
+from wm.models.world_model import build_world_model, expected_params, param_counts
 from wm.report import Report
-from wm.train.train_wm import LOSS_KEYS, decoded_rollout, run_training
+from wm.train.train_wm import decoded_rollout, loss_keys, prepare_model, run_training
 from wm.viz.media import rollout_filmstrip
 
 ARTIFACT = "ckpt-wm"
@@ -34,12 +34,13 @@ def run(ctx: JobContext, report: Report, artifact: str = ARTIFACT,
     arrays, job.data_name = load_npz(ctx)
     data = WindowData(arrays, device, cfg["val"]["seeds"],
                       window=cfg["window"]["context"] + cfg["window"]["horizon"])
-    model = build_world_model(cfg).to(device)
-    if model.input_mean is not None:
-        model.set_input_mean(data.train_mean_frame())
+    model = prepare_model(build_world_model(cfg).to(device), data)
+    keys = loss_keys(model)
+    keep_best = bool(cfg.get("keep_best", False))   # Phase 3b C; off in wm.yaml
     counts = param_counts(model)
     job.set_params(report, counts)
-    check_param_counts(report, counts, EXPECTED_PARAMS, "CLAUDE.md §4")
+    check_param_counts(report, counts, expected_params(model),
+                       "CLAUDE.md §4 (+ proprio)" if model.proprio else "CLAUDE.md §4")
 
     def on_val(step: int, v: dict[str, Any]) -> None:
         print(f"step {step}: val loss {v['loss']:.4g} nmse@10 {v['nmse'][-1]:.3f} "
@@ -49,9 +50,17 @@ def run(ctx: JobContext, report: Report, artifact: str = ARTIFACT,
         row.update({f"val/copy_last_nmse_k{k}": v["nmse_copy_last"][k - 1] for k in KS})
         job.wandb_log(row, step)
 
-    result = run_training(model, data, tcfg, device, weights, start=job.start,
+    result = run_training(model, data, tcfg, device, weights, start=job.start, keep_best=keep_best,
                           on_checkpoint=job.on_checkpoint, on_log=job.on_log, on_val=on_val)
     step, log, val = result["step"], result["log"], result["val_log"][-1]
+    extra: dict[str, Any] = {}
+    if keep_best:   # the final artifact holds the best-val-NMSE@10 weights
+        best = result["best"]
+        model.load_state_dict(best["model"])
+        val = next(v for v in result["val_log"] if v["step"] == best["step"])
+        extra = {"best_step": best["step"], "best_nmse10": best["value"],
+                 "last_nmse10": result["val_log"][-1]["nmse"][-1]}
+        job.extra_info = extra
 
     # ---- final artifact: weights only + round-trip check ----
     model_path = job.save_model(model, step)
@@ -63,11 +72,11 @@ def run(ctx: JobContext, report: Report, artifact: str = ARTIFACT,
     real, decoded = decoded_rollout(model, data, data.fixed_val_starts(1, tcfg["val_seed"])[0], device)
     strip_path = job.art_dir / "rollout_filmstrip.png"
     imageio.imwrite(strip_path, rollout_filmstrip(real, decoded))
-    summary = job.write_summary(result, LOSS_KEYS, data_summary=data.summary(), val=val)
+    summary = job.write_summary(result, keys, data_summary=data.summary(), val=val, **extra)
     first, last = summary["loss_first"], summary["loss_last"]
 
     # ---- checks ----
-    job.loss_checks(report, summary, log, LOSS_KEYS)
+    job.loss_checks(report, summary, log, keys)
     report.check_true("z_std", val["z_std"] > 0.1, f"{val['z_std']:.3f}", "> 0.1, collapse alarm")
     report.check_true("checkpoint_roundtrip", same, "identical latents" if same else "mismatch",
                       "model.pt reload == trained model")
@@ -93,6 +102,11 @@ def run(ctx: JobContext, report: Report, artifact: str = ARTIFACT,
         report.metric(f"val_nmse_k{k}", f"{val['nmse'][k - 1]:.3f} (copy-last {val['nmse_copy_last'][k - 1]:.3f})")
     report.metric("val_z_std", f"{val['z_std']:.3f}")
     report.metric("val_loss", f"{val['loss']:.4f}")
+    if "pusher_px" in val:
+        report.metric("val_pusher_px_k10", f"{val['pusher_px'][-1]:.1f} (copy-last {val['pusher_px_copy_last'][-1]:.1f})")
+    if keep_best:
+        report.metric("kept_checkpoint", f"best step {extra['best_step']} (val nmse@10 {extra['best_nmse10']:.3f}; "
+                      f"last step {step}: {extra['last_nmse10']:.3f})")
     report.metric("lr_final", f"{log[-1]['lr']:.2e}")
 
     job.push_final(report, result, [model_path, job.art_dir / "train_summary.json",

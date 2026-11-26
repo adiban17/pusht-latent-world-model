@@ -13,7 +13,7 @@ import torch
 from wm.data.windows import WindowData, frames_to_model, state_targets
 from wm.models.probe import decode_targets, probe_errors
 from wm.models.world_model import WorldModel
-from wm.train.train_wm import open_loop_z_hat
+from wm.train.train_wm import batch_loss, gather, open_loop
 
 TERMS = ("loss", "rec", "lat", "img", "var")
 FG_THRESHOLD = 0.1   # a pixel is "non-background" if any channel differs from the mean frame by > 0.1 (~25/255)
@@ -27,19 +27,31 @@ def subset(starts: torch.Tensor, n: int, seed: int = 0) -> torch.Tensor:
 
 @torch.no_grad()
 def window_terms(model: WorldModel, data: WindowData, starts: torch.Tensor,
-                 weights: dict[str, float], chunk: int = 64) -> tuple[dict[str, float], torch.Tensor, torch.Tensor]:
-    """Mean loss terms over windows, plus z [N, C+H, D] and open-loop z_hat [N, H, D] (CPU)."""
+                 weights: dict[str, float], chunk: int = 64,
+                 with_p: bool = False) -> tuple:
+    """Mean loss terms over windows, plus z [N, C+H, D] and open-loop z_hat [N, H, D] (CPU).
+
+    with_p=True also returns open-loop p_hat [N, H, 2] (None unless the model is proprio); a
+    proprio model's terms include `proprio`.
+    """
     model.eval()
-    sums = {k: 0.0 for k in TERMS}
-    zs, z_hats = [], []
+    terms = TERMS + (("proprio",) if model.proprio else ())
+    sums = {k: 0.0 for k in terms}
+    zs, z_hats, p_hats = [], [], []
     for i in range(0, len(starts), chunk):
-        frames, actions = data.gather(starts[i:i + chunk])
-        out = model.window_loss(frames, actions, weights)
-        for k in TERMS:
-            sums[k] += float(out[k]) * len(frames)
+        batch = gather(model, data, starts[i:i + chunk])
+        out = batch_loss(model, batch, weights)
+        for k in terms:
+            sums[k] += float(out[k]) * len(batch[0])
         zs.append(out["z"].float().cpu())
-        z_hats.append(open_loop_z_hat(model, out, actions).float().cpu())
-    return {k: v / len(starts) for k, v in sums.items()}, torch.cat(zs), torch.cat(z_hats)
+        z_hat, p_hat = open_loop(model, out, batch[1], batch[2] if model.proprio else None)
+        z_hats.append(z_hat.float().cpu())
+        if p_hat is not None:
+            p_hats.append(p_hat.float().cpu())
+    res = ({k: v / len(starts) for k, v in sums.items()}, torch.cat(zs), torch.cat(z_hats))
+    if with_p:
+        return (*res, torch.cat(p_hats) if p_hats else None)
+    return res
 
 
 @torch.no_grad()
@@ -91,6 +103,36 @@ def state_error_summary(pred: np.ndarray, states: np.ndarray) -> dict[str, float
     out = {}
     for k, v in errs.items():
         out[f"{k}_mean"], out[f"{k}_median"] = float(v.mean()), float(np.median(v))
+    return out
+
+
+def imagined_probe(w: torch.Tensor, starts: np.ndarray, z: torch.Tensor, z_hat: torch.Tensor,
+                   states: np.ndarray, context: int, ks: tuple[int, ...]) -> dict[str, Any]:
+    """Ridge probe W applied at each k to imagined z_hat_{t+k}, real z_{t+k} and copy-last z_t,
+    scored against the true state at t+k. starts = window starts (frame t = start + C - 1)."""
+    t_idx = np.asarray(starts) + context - 1
+    out: dict[str, Any] = {}
+    for k in ks:
+        s_k = states[t_idx + k]
+        out[f"k{k}"] = {
+            "imagined": state_error_summary(ridge_predict(w, z_hat[:, k - 1]), s_k),
+            "real_z": state_error_summary(ridge_predict(w, z[:, context - 1 + k]), s_k),
+            "copy_last": state_error_summary(ridge_predict(w, z[:, context - 1]), s_k)}
+    return out
+
+
+def pusher_errors(p_hat: torch.Tensor, starts: np.ndarray, states: np.ndarray, context: int,
+                  ks: tuple[int, ...]) -> dict[str, Any]:
+    """Pusher px error of the predicted p_hat (normalised) at each k, and of copy-last p_t."""
+    t_idx = np.asarray(starts) + context - 1
+    out: dict[str, Any] = {}
+    for k in ks:
+        true = states[t_idx + k, :2].astype(np.float64)
+        pred = (p_hat[:, k - 1].double().numpy() + 1.0) * 256.0
+        copy = states[t_idx, :2].astype(np.float64)
+        e, ec = np.linalg.norm(pred - true, axis=-1), np.linalg.norm(copy - true, axis=-1)
+        out[f"k{k}"] = {"p_hat_mean": float(e.mean()), "p_hat_median": float(np.median(e)),
+                        "copy_last_mean": float(ec.mean()), "copy_last_median": float(np.median(ec))}
     return out
 
 

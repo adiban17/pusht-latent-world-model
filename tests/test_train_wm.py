@@ -7,7 +7,7 @@ from wm.data.collect import collect_split
 from wm.data.windows import WindowData
 from wm.models.world_model import build_world_model
 from wm.repro import REPO_ROOT, load_yaml, seed_all
-from wm.train.train_wm import loss_window_means, resolve_config, run_training
+from wm.train.train_wm import loss_window_means, prepare_model, resolve_config, run_training
 
 CFG = load_yaml(REPO_ROOT / "configs/wm.yaml")
 DATA_CFG = load_yaml(REPO_ROOT / "configs/data.yaml")
@@ -62,3 +62,43 @@ def test_resume_is_bit_identical(data):
     for k, v in full["state"]["model"].items():
         assert torch.equal(v, resumed["state"]["model"][k]), k
     assert len(resumed["val_log"]) == 2
+
+
+def test_keep_best_picks_min_nmse_and_resumes_identically(data):
+    t = tcfg(steps=16, warmup_steps=4, val_every=4, ckpt_every=8)
+    dev = torch.device("cpu")
+    full = run_training(fresh_model(), data, t, dev, W, keep_best=True)
+    nmse = {v["step"]: v["nmse"][-1] for v in full["val_log"]}
+    best_step = min(nmse, key=nmse.get)
+    assert full["best"]["step"] == best_step and full["best"]["value"] == nmse[best_step]
+    assert "best" in full["state"]
+
+    saved = []
+    run_training(fresh_model(), data, t, dev, W, keep_best=True, stop_at=8,
+                 on_checkpoint=lambda s: saved.append(copy.deepcopy(s)))
+    assert saved[-1]["best"] is not None
+    resumed = run_training(fresh_model(), data, t, dev, W, keep_best=True, start=saved[-1])
+    assert resumed["best"]["step"] == full["best"]["step"]
+    for k, v in full["best"]["model"].items():
+        assert torch.equal(v, resumed["best"]["model"][k]), k
+
+
+def test_v1_has_no_best_key_and_unchanged_log_keys(data):
+    t = tcfg(steps=4, warmup_steps=2, val_every=4, ckpt_every=2)
+    saved = []
+    res = run_training(fresh_model(), data, t, torch.device("cpu"), W,
+                       on_checkpoint=lambda s: saved.append(s))
+    assert "best" not in res and "best" not in res["state"] and "best" not in saved[0]
+    assert set(res["log"][0]) == {"loss", "rec", "lat", "img", "var", "z_std", "lr"}
+
+
+def test_proprio_fg_training_runs_and_validates(data):
+    cfg = {**CFG, "fg_weight": True, "proprio": True, "loss": {**CFG["loss"], "proprio": 1.0}}
+    seed_all(0)
+    m = prepare_model(build_world_model(cfg), data)
+    assert m.fg_mean.abs().sum() > 0
+    t = tcfg(steps=6, warmup_steps=2, val_every=6, ckpt_every=1000)
+    res = run_training(m, data, t, torch.device("cpu"), dict(cfg["loss"]))
+    assert "proprio" in res["log"][0]
+    v = res["val_log"][-1]
+    assert len(v["pusher_px"]) == 10 and len(v["pusher_px_copy_last"]) == 10 and "proprio" in v

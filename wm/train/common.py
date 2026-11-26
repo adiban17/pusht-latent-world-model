@@ -117,7 +117,8 @@ def train_loop(model: nn.Module, sample: Callable[[torch.Generator], Any],
                start: dict[str, Any] | None = None, stop_at: int | None = None,
                on_checkpoint: Callable[[dict[str, Any]], None] | None = None,
                on_log: Callable[[int, dict[str, float]], None] | None = None,
-               on_val: Callable[[int, dict[str, Any]], None] | None = None) -> dict[str, Any]:
+               on_val: Callable[[int, dict[str, Any]], None] | None = None,
+               select: Callable[[dict[str, Any]], float] | None = None) -> dict[str, Any]:
     """Train to tcfg["steps"] (or `stop_at`), resuming from checkpoint `start` if given.
 
     sample(gen) draws a batch with the (CPU) sampler generator; loss_fn(batch) returns a dict
@@ -125,11 +126,17 @@ def train_loop(model: nn.Module, sample: Callable[[torch.Generator], Any],
     Every ckpt_every steps (before the end) on_checkpoint gets the full training state, which
     `start` accepts back: model, optimiser, scaler, sampler RNG, global torch RNG, step and
     logs. Resuming gives bit-identical results to an uninterrupted run (CPU).
+
+    select(val_metrics) -> float (lower is better; keep_best, Phase 3b C): after every validation
+    the weights with the lowest value so far are kept as {"step", "value", "model"}; they are
+    in the checkpoint state under "best" and returned as result["best"]. Without `select` there
+    is no "best" key anywhere.
     """
     opt = make_optimizer(model, tcfg["lr"], tcfg["weight_decay"])
     scaler = make_scaler(device, tcfg["amp"])
     gen = torch.Generator().manual_seed(int(tcfg["seed"]))
     step, log, val_log = 0, [], []
+    best: dict[str, Any] | None = None
     if start is not None:
         model.load_state_dict(start["model"])
         opt.load_state_dict(start["opt"])
@@ -140,14 +147,18 @@ def train_loop(model: nn.Module, sample: Callable[[torch.Generator], Any],
         if "cuda_rng" in start and torch.cuda.is_available():
             torch.cuda.set_rng_state_all(start["cuda_rng"])
         step, log, val_log = int(start["step"]), list(start["log"]), list(start["val_log"])
+        best = start.get("best")
     total = int(tcfg["steps"])
     end = total if stop_at is None else min(int(stop_at), total)
 
     def state() -> dict[str, Any]:
-        return {"step": step, "model": copy.deepcopy(model.state_dict()),
-                "opt": copy.deepcopy(opt.state_dict()), "scaler": scaler.state_dict(),
-                "rng": gen.get_state(), **_global_rng_state(),
-                "log": list(log), "val_log": list(val_log)}
+        s = {"step": step, "model": copy.deepcopy(model.state_dict()),
+             "opt": copy.deepcopy(opt.state_dict()), "scaler": scaler.state_dict(),
+             "rng": gen.get_state(), **_global_rng_state(),
+             "log": list(log), "val_log": list(val_log)}
+        if select is not None:
+            s["best"] = best
+        return s
 
     timer = StepTimer(skip=min(10, max(0, (end - step) // 5)))
     model.train()
@@ -174,12 +185,19 @@ def train_loop(model: nn.Module, sample: Callable[[torch.Generator], Any],
             v = validate()
             model.train()
             val_log.append({"step": step, **v})
+            if select is not None:
+                value = float(select(v))
+                if best is None or value < best["value"]:
+                    best = {"step": step, "value": value, "model": copy.deepcopy(model.state_dict())}
             if on_val is not None:
                 on_val(step, v)
         if on_checkpoint is not None and step % tcfg["ckpt_every"] == 0 and step < total:
             on_checkpoint(state())
-    return {"step": step, "complete": step >= total, "log": log, "val_log": val_log,
-            "it_per_s": timer.rate(), "steps_this_run": timer.seen, "state": state()}
+    result = {"step": step, "complete": step >= total, "log": log, "val_log": val_log,
+              "it_per_s": timer.rate(), "steps_this_run": timer.seen, "state": state()}
+    if select is not None:
+        result["best"] = best
+    return result
 
 
 def loss_window_means(log: list[dict[str, float]], n: int, keys: tuple[str, ...]) -> tuple[dict, dict]:

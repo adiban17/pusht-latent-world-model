@@ -23,8 +23,8 @@ import torch
 
 from wm.data.windows import WindowData, episode_frames, frames_to_model, split_episodes
 from wm.envs.pusht import denormalize_image
-from wm.eval.diagnose import (TERMS, encode_frames, recon_errors, ridge_predict, ridge_probe,
-                              state_error_summary, subset, window_terms)
+from wm.eval.diagnose import (TERMS, encode_frames, imagined_probe, recon_errors, ridge_probe,
+                              subset, window_terms)
 from wm.eval.rollouts import latent_nmse
 from wm.jobs import JobContext
 from wm.jobs._trainer import load_npz
@@ -94,16 +94,8 @@ def run(ctx: JobContext, report: Report) -> None:
     # ---- 3. ridge probe z -> state; then on imagined latents ----
     z_tr = encode_frames(model, data.frames[train_frames.to(device)])
     w, ridge = ridge_probe(z_tr, states[train_frames.numpy()], z_ref, states[val_frames.numpy()], RIDGE_LAMBDA)
-    imagined: dict[str, dict[str, Any]] = {}
-    for split, (ws, z, z_hat) in windows.items():
-        t_idx = ws.numpy() + c - 1
-        imagined[split] = {}
-        for k in KS:
-            s_k = states[t_idx + k]
-            imagined[split][f"k{k}"] = {
-                "imagined": state_error_summary(ridge_predict(w, z_hat[:, k - 1]), s_k),
-                "real_z": state_error_summary(ridge_predict(w, z[:, c - 1 + k]), s_k),
-                "copy_last": state_error_summary(ridge_predict(w, z[:, c - 1]), s_k)}
+    imagined = {split: imagined_probe(w, ws.numpy(), z, z_hat, states, c, KS)
+                for split, (ws, z, z_hat) in windows.items()}
 
     # ---- 4. reconstruction filmstrip of 8 val frames ----
     pick = val_frames[np.linspace(0, len(val_frames) - 1, FILM_FRAMES).round().astype(int)].to(device)

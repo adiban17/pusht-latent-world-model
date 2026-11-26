@@ -79,3 +79,20 @@ def test_val_seeds_match_data_config():
     wm = load_yaml(REPO_ROOT / "configs/wm.yaml")
     data = load_yaml(REPO_ROOT / "configs/data.yaml")
     assert wm["val"]["seeds"] == data["val_seeds"]
+
+
+def test_gather_pusher_is_normalised_state_and_keeps_draws():
+    arrays = fake_arrays([5, 190, 6, 199])
+    f = len(arrays["frames"])
+    arrays["states"] = np.zeros((f, 5), np.float32)
+    arrays["states"][:, 0] = np.arange(f)            # pusher x = global frame index
+    arrays["states"][:, 1] = 256.0
+    d = WindowData(arrays, "cpu", [190, 199])
+    frames, actions = d.sample(16, torch.Generator().manual_seed(3))
+    frames_p, actions_p, pusher = d.sample(16, torch.Generator().manual_seed(3), pusher=True)
+    assert torch.equal(frames, frames_p) and torch.equal(actions, actions_p)   # same RNG draws
+    assert pusher.shape == (16, 13, 2)
+    ep = ((frames[:, :, 0, 0, 0] + 0.5) * 255).round()
+    idx = ((frames[:, :, 1, 0, 0] + 0.5) * 255).round()
+    assert torch.allclose((pusher[..., 0] + 1) * 256, ep * 20 + idx)            # x = frame index
+    assert torch.allclose(pusher[..., 1], torch.zeros(16, 13))                 # 256 -> 0

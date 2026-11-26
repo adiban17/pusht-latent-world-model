@@ -1,0 +1,25 @@
+# Phase 3b ablation of world-model fixes (job wm_ablate). Short runs on the full data, same seed.
+# Each variant = base_config (configs/wm.yaml) + its overrides + the `train` overrides below.
+# Three training runs give four table rows: AB is trained once with keep_best, and both its
+# last weights ("A+B") and its best-val-NMSE@10 weights ("A+B+C") are evaluated.
+base_config: configs/wm.yaml
+variants:
+  v1: {}                                   # the Phase 3 model as trained on Kaggle (all off)
+  A: {fg_weight: true}                     # foreground-weighted rec + img losses
+  AB: {fg_weight: true, proprio: true, keep_best: true}
+options:                                   # values used when a flag is on
+  fg_alpha: 20.0
+  fg_threshold: 0.0980392156862745         # 25/255
+  loss_proprio: 1.0                        # weight of the next-pusher-position MSE
+train:                                     # overrides of the base `train` block (full mode)
+  steps: 5000
+  warmup_steps: 500                        # then cosine to 0 over the 5,000 steps
+  val_every: 250                           # 20 keep_best candidates
+  log_every: 250
+eval:                                      # val windows: the base config's val.windows (256)
+  max_train_frames: 4096                   # ridge probe fit
+  ridge_lambda: 1.0
+  ks: [5, 10]
+smoke:                                     # replace the base config's smoke block
+  local:  {batch_size: 4, steps: 50, warmup_steps: 5, val_every: 25, log_every: 10, val_windows: 16}
+  remote: {batch_size: 64, steps: 300, warmup_steps: 30, val_every: 100, log_every: 25, val_windows: 256}

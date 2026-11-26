@@ -29,6 +29,12 @@ jobs:
     config: null
     needs: [pusht-data, ckpt-wm]
     makes: []           # writes outputs only, so it reruns every time
+  wm_ablate:            # Phase 3b: short runs of the world-model fixes (fg_weight, proprio, keep_best)
+    phase: 3
+    module: wm.jobs.wm_ablate
+    config: configs/wm_ablate.yaml
+    needs: [pusht-data]
+    makes: [results-wm-ablate]
   train_wm_1step:
     phase: 4
     module: wm.jobs.train_wm_1step

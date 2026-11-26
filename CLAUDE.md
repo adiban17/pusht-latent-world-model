@@ -120,6 +120,8 @@ Loss (element means): `λ_rec·MSE(D(z_j), o_j)` over all 13 frames + `λ_lat·m
 
 **Decision (Phase 3, 2026-11-26):** add a VICReg-style variance hinge `λ_var·mean_d relu(1 − std_batch(z_d))` (std over all 13·B latents of the batch, +1e-4 inside the sqrt), λ_var = 1.0. Without it the spec'd model collapses (z_std ≈ 0.003: every frame encodes to nearly the same latent). Chosen from a 5-variant local comparison (`results/ablation_collapse_local.json`, `scripts/compare_collapse_fixes.py`). Architecture and parameter counts are unchanged.
 
+**Phase 3b options (2026-11-26; config flags, all off by default, so `wm.yaml` is the model above):** (A) `fg_weight`: rec/img loss weight w = 1 + 20·mask, mask = |frame − train mean frame| > 25/255 in any channel; (B) `proprio`: pusher position p is model state, dynamics input [z, p, a], extra head Linear(320 → 2) (zero-init) predicts p' = p + Δp with MSE weight 1.0, rollouts feed back p̂, `rollout(..., p0=p) -> (z_hat, p_hat)`; total params 4,186,053 (planner 2,443,490); (C) `keep_best`: keep the checkpoint with the best val NMSE@10 and record `best_step`. Job `wm_ablate` compares them (PROGRESS.md has the pre-registered selection rule).
+
 Training: batch 64 windows; AdamW lr 3e-4, wd 1e-4; 500-step linear warm-up then cosine; 30,000 steps (full); fp16 autocast + GradScaler; grad-clip 1.0; validation every 1,000 steps on val episodes; checkpoint every 5,000 steps (pushed to the store, so a killed run resumes) + final. Log each loss term and the **collapse alarm** `z_std` = mean over dims of the batch std of z (CHECK: > 0.1).
 
 Smoke: 50 steps, batch 4 locally; on Kaggle 300 steps at full batch on the real data. Smoke REPORT includes it/s after warm-up, projected time for 30,000 steps, peak GPU memory, first vs last loss.
@@ -201,6 +203,7 @@ Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decode
 | `env_check` | 1 | – | `env-check` (tiny round-trip file) |
 | `collect_data` | 2 | – | `pusht-data` |
 | `train_wm` | 3 | `pusht-data` | `ckpt-wm` |
+| `wm_ablate` | 3b | `pusht-data` | `results-wm-ablate` (+ `results/ablation_wm_fixes.json`) |
 | `train_baselines` | 4 | `pusht-data` | `ckpt-wm-1step`, `ckpt-pixel`, `ckpt-bc`, `ckpt-probe` |
 | `eval_rollouts` | 5 | data + `ckpt-wm`, `ckpt-wm-1step`, `ckpt-pixel`, `ckpt-probe` | `results-rollouts` |
 | `plan_val` | 6 | data + `ckpt-wm`, `ckpt-wm-1step`, `ckpt-bc` (+ makes `eval-pairs` if missing) | `results-plan-val` |
