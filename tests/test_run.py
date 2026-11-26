@@ -35,8 +35,8 @@ def test_unknown_job(capsys):
 
 
 def test_unbuilt_job(capsys):
-    assert run.main(["--job", "train_wm_1step"]) == 2
-    assert "not built yet (Phase 4)" in capsys.readouterr().out
+    assert run.main(["--job", "eval_rollouts"]) == 2
+    assert "not built yet (Phase 5)" in capsys.readouterr().out
 
 
 def test_collect_data_smoke_then_skip(capsys, isolated_dirs):
@@ -110,3 +110,27 @@ def test_train_wm_smoke_resume_then_skip(capsys, isolated_dirs, monkeypatch):
 
     assert run.main(["--job", "train_wm"]) == 0
     assert "already finished, skipping" in capsys.readouterr().out
+
+
+def test_train_baselines_group_smoke_then_skip(capsys, isolated_dirs):
+    """The Phase 4 group runs all four jobs in order with no FAIL; a rerun skips every one."""
+    import json
+
+    assert run.main(["--job", "collect_data"]) == 0
+    capsys.readouterr()
+    code = run.main(["--job", "train_baselines"])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert "[FAIL]" not in out and out.count("RUN REPORT") == 4
+    order = [out.index(f"job: {j} ") for j in ("train_wm_1step", "train_pixel", "train_bc", "train_probe")]
+    assert order == sorted(order)
+    assert "[PASS] teacher_forcing: true" in out
+    assert "params: 4,813,731" in out and "params: 2,528,482" in out and "params: 1,740,518" in out
+    for name in ("ckpt-wm-1step", "ckpt-pixel", "ckpt-bc", "ckpt-probe"):
+        meta = json.loads((isolated_dirs / "store" / f"{name}-smoke" / "meta.json").read_text())
+        assert meta["complete"] is True and meta["step"] == 50, name
+        assert (isolated_dirs / "store" / f"{name}-smoke" / "files" / "model.pt").exists()
+    assert not (isolated_dirs / "store" / "ckpt-wm-smoke").exists()   # never touches ckpt-wm
+
+    assert run.main(["--job", "train_baselines"]) == 0
+    assert capsys.readouterr().out.count("already finished, skipping") == 4

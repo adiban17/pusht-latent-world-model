@@ -1,0 +1,40 @@
+# Pixel-space baseline (CLAUDE.md §5): U-Net next-frame predictor, trained one-step, teacher-forced.
+seed: 0
+model:
+  context: 3          # frames t-2, t-1, t stacked as 9 channels
+  action_dim: 2       # a_t tiled as 2 constant channels
+window:
+  context: 3
+  horizon: 10         # val: open-loop 10-step rollouts (training is one-step)
+train:
+  batch_size: 64
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  warmup_steps: 500   # linear warm-up, then cosine to 0
+  steps: 30000
+  grad_clip: 1.0
+  amp: true           # fp16 autocast + GradScaler (CUDA only; off on CPU)
+  val_every: 1000
+  ckpt_every: 5000
+  log_every: 100
+val:
+  seeds: [190, 199]   # inclusive; must match configs/data.yaml val_seeds
+  windows: 256        # fixed, seeded set of 13-frame val windows
+  seed: 0
+smoke:                # overrides of `train` (+ val.windows) in --mode smoke
+  local:              # M1 CPU
+    batch_size: 4
+    steps: 50
+    warmup_steps: 5
+    val_every: 25
+    ckpt_every: 25
+    log_every: 10
+    val_windows: 16
+  remote:             # Kaggle/Colab T4, real data: timing run
+    batch_size: 64
+    steps: 300
+    warmup_steps: 30
+    val_every: 100
+    ckpt_every: 150
+    log_every: 25
+    val_windows: 256

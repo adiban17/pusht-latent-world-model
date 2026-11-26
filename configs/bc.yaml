@@ -1,0 +1,45 @@
+# Goal-conditioned behaviour cloning (CLAUDE.md §6).
+seed: 0
+model:
+  latent_dim: 256     # shared encoder (§4 design, fresh weights) for 3 context frames + goal
+  hidden: 512         # MLP 1026 -> 512 -> 512 -> 2
+  context: 3
+  dropout: 0.1
+goal:
+  k_min: 5            # goal = frame t + k, k ~ U{k_min..k_max}, clipped to the episode end
+  k_max: 30
+delta_scale: 50.0     # output = (dx, dy) / 50 px relative to the pusher
+shift_px: 4           # random shift ±4 px (pad 4, random crop), same for all 4 images of a sample
+use_clean_actions: false   # stretch ablation: regress the expert's clean actions instead
+train:
+  batch_size: 256
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  warmup_steps: 500
+  steps: 20000
+  grad_clip: 1.0
+  amp: true
+  val_every: 1000
+  ckpt_every: 5000
+  log_every: 100
+val:
+  seeds: [190, 199]
+  windows: 1024       # fixed, seeded set of val samples (t, k)
+  seed: 0
+smoke:
+  local:
+    batch_size: 8
+    steps: 50
+    warmup_steps: 5
+    val_every: 25
+    ckpt_every: 25
+    log_every: 10
+    val_windows: 64
+  remote:
+    batch_size: 256
+    steps: 300
+    warmup_steps: 30
+    val_every: 100
+    ckpt_every: 150
+    log_every: 25
+    val_windows: 1024

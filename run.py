@@ -34,6 +34,11 @@ def load_job_config(entry: dict[str, Any]) -> dict[str, Any]:
     return load_yaml(path) if path.exists() else {}
 
 
+def job_config_hash(name: str, entry: dict[str, Any], cfg: dict[str, Any]) -> str:
+    """config_hash = hash of the job name, its jobs.yaml entry and its config file."""
+    return config_hash({"job": name, "entry": entry, "config": cfg})
+
+
 def is_finished(store, entry: dict[str, Any], chash: str) -> bool:
     """True if every artifact the job makes exists, is complete and has the same config_hash."""
     makes = entry.get("makes") or []
@@ -64,7 +69,7 @@ def run_job(name: str, mode: str, force: bool, registry: dict[str, Any]) -> int:
         raise
 
     cfg = load_job_config(entry)
-    chash = config_hash({"job": name, "entry": entry, "config": cfg})
+    chash = job_config_hash(name, entry, cfg)
     store = make_store(platform, mode)
     if not force and is_finished(store, entry, chash):
         print(f"{name}: already finished, skipping (use --force to rerun)")

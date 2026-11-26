@@ -1,0 +1,36 @@
+# State probe (CLAUDE.md §7): encoder -> Linear 256 -> 6 (pusher xy, block CoG xy, sin, cos).
+seed: 0
+model:
+  latent_dim: 256
+train:
+  batch_size: 256
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  warmup_steps: 500
+  steps: 10000
+  grad_clip: 1.0
+  amp: true
+  val_every: 1000
+  ckpt_every: 5000
+  log_every: 100
+val:
+  seeds: [190, 199]
+  windows: 1010       # val frames (all 10 val episodes x 101 frames)
+  seed: 0
+smoke:
+  local:
+    batch_size: 16
+    steps: 50
+    warmup_steps: 5
+    val_every: 25
+    ckpt_every: 25
+    log_every: 10
+    val_windows: 64
+  remote:
+    batch_size: 256
+    steps: 300
+    warmup_steps: 30
+    val_every: 100
+    ckpt_every: 150
+    log_every: 25
+    val_windows: 1010
