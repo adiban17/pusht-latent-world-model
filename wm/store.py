@@ -145,6 +145,10 @@ class Store:
         resolved = self.resolve(name)
         return self.backend.metadata(resolved) if resolved else None
 
+    def pull_own(self, name: str) -> Path | None:
+        """Pull what *this mode* writes (used to resume a training run from its own checkpoint)."""
+        return self.backend.pull(write_name(name, self.mode))
+
     def own_metadata(self, name: str) -> dict[str, Any] | None:
         """Metadata of what *this mode* would write (used for skip/resume)."""
         return self.backend.metadata(write_name(name, self.mode))

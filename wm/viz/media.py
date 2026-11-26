@@ -31,6 +31,15 @@ def filmstrip(frames: np.ndarray, n: int = 8, scale: int = 2, gap: int = 2) -> n
     return out
 
 
+def rollout_filmstrip(real: np.ndarray, decoded: np.ndarray, scale: int = 2,
+                      gap: int = 2) -> np.ndarray:
+    """Two rows: real frames (top) and decoded imagined frames (bottom), each [T, H, W, 3] uint8."""
+    top = filmstrip(real, n=len(real), scale=scale, gap=gap)
+    bottom = filmstrip(decoded, n=len(decoded), scale=scale, gap=gap)
+    sep = np.full((gap * 2, top.shape[1], 3), 255, np.uint8)
+    return np.concatenate([top, sep, bottom], axis=0)
+
+
 def save_histograms(arrays: dict[str, np.ndarray], path: str | Path) -> Path:
     """Histograms of block centre x/y, block angle, action x/y and per-step block movement."""
     import matplotlib

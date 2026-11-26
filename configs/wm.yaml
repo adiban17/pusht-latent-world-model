@@ -1,0 +1,48 @@
+# Latent world model (CLAUDE.md §4): CNN encoder + GRU dynamics + decoder.
+seed: 0
+model:
+  latent_dim: 256
+  hidden_dim: 320
+  action_dim: 2
+window:
+  context: 3          # frames t-2, t-1, t
+  horizon: 10         # predict t+1 .. t+10
+teacher_forcing: false  # wm_1step.yaml (Phase 4) sets this to true
+loss:
+  rec: 1.0            # lambda_rec: decoder reconstruction of all 13 frames
+  lat: 0.1            # lambda_lat: latent prediction vs detached encoder latents
+  img: 1.0            # lambda_img: decoded predictions vs real frames
+  var: 1.0            # lambda_var: variance hinge on z (Phase 3 decision; stops latent collapse)
+var_target: 1.0       # hinge target for the per-dim batch std of z
+train:
+  batch_size: 64
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  warmup_steps: 500   # linear warm-up, then cosine to 0
+  steps: 30000
+  grad_clip: 1.0
+  amp: true           # fp16 autocast + GradScaler (CUDA only; off on CPU)
+  val_every: 1000
+  ckpt_every: 5000
+  log_every: 100
+val:
+  seeds: [190, 199]   # inclusive; must match configs/data.yaml val_seeds
+  windows: 256        # fixed, seeded set of val windows
+  seed: 0
+smoke:                # overrides of `train` (+ val.windows) in --mode smoke
+  local:              # M1 CPU
+    batch_size: 4
+    steps: 50
+    warmup_steps: 5
+    val_every: 25
+    ckpt_every: 25
+    log_every: 10
+    val_windows: 16
+  remote:             # Kaggle/Colab T4, real data: timing run
+    batch_size: 64
+    steps: 300
+    warmup_steps: 30
+    val_every: 100
+    ckpt_every: 150
+    log_every: 25
+    val_windows: 256

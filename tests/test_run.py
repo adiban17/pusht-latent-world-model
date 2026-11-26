@@ -35,8 +35,8 @@ def test_unknown_job(capsys):
 
 
 def test_unbuilt_job(capsys):
-    assert run.main(["--job", "train_wm"]) == 2
-    assert "not built yet (Phase 3)" in capsys.readouterr().out
+    assert run.main(["--job", "train_wm_1step"]) == 2
+    assert "not built yet (Phase 4)" in capsys.readouterr().out
 
 
 def test_collect_data_smoke_then_skip(capsys, isolated_dirs):
@@ -73,3 +73,40 @@ def test_env_check_runs_then_skips_then_force(capsys, isolated_dirs):
 
     assert run.main(["--job", "env_check", "--force"]) == 0
     assert "RUN REPORT" in capsys.readouterr().out
+
+
+def test_train_wm_smoke_resume_then_skip(capsys, isolated_dirs, monkeypatch):
+    """A run killed after its step-25 checkpoint resumes from it; a finished run is skipped."""
+    import json
+
+    import wm.jobs.train_wm as job
+
+    assert run.main(["--job", "collect_data"]) == 0
+    real = job.run_training
+
+    def killed(*args, **kwargs):
+        real(*args, stop_at=25, **kwargs)
+        raise KeyboardInterrupt("simulated kill after step 25")
+
+    monkeypatch.setattr(job, "run_training", killed)
+    with pytest.raises(KeyboardInterrupt):
+        run.main(["--job", "train_wm"])
+    meta_path = isolated_dirs / "store" / "ckpt-wm-smoke" / "meta.json"
+    meta = json.loads(meta_path.read_text())
+    assert meta["complete"] is False and meta["step"] == 25
+
+    monkeypatch.setattr(job, "run_training", real)
+    capsys.readouterr()
+    code = run.main(["--job", "train_wm"])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert "params: 4,184,899" in out and "resumed_from_step = 25" in out
+    assert "[PASS] param_counts" in out and "[FAIL]" not in out
+    meta = json.loads(meta_path.read_text())
+    assert meta["complete"] is True and meta["step"] == 50
+    files = isolated_dirs / "store" / "ckpt-wm-smoke" / "files"
+    assert (files / "model.pt").exists() and (files / "rollout_filmstrip.png").exists()
+    assert not (files / "checkpoint.pt").exists()
+
+    assert run.main(["--job", "train_wm"]) == 0
+    assert "already finished, skipping" in capsys.readouterr().out

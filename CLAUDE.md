@@ -118,6 +118,8 @@ Window = 13 frames o[t−2..t+10] and 12 actions a[t−2..t+9]; context C = 3, h
 
 Loss (element means): `λ_rec·MSE(D(z_j), o_j)` over all 13 frames + `λ_lat·mean_k MSE(ẑ_{t+k}, z_{t+k}.detach())` + `λ_img·mean_k MSE(D(ẑ_{t+k}), o_{t+k})`; λ_rec = 1.0, λ_lat = 0.1, λ_img = 1.0 (config).
 
+**Decision (Phase 3, 2026-11-26):** add a VICReg-style variance hinge `λ_var·mean_d relu(1 − std_batch(z_d))` (std over all 13·B latents of the batch, +1e-4 inside the sqrt), λ_var = 1.0. Without it the spec'd model collapses (z_std ≈ 0.003: every frame encodes to nearly the same latent). Chosen from a 5-variant local comparison (`results/ablation_collapse_local.json`, `scripts/compare_collapse_fixes.py`). Architecture and parameter counts are unchanged.
+
 Training: batch 64 windows; AdamW lr 3e-4, wd 1e-4; 500-step linear warm-up then cosine; 30,000 steps (full); fp16 autocast + GradScaler; grad-clip 1.0; validation every 1,000 steps on val episodes; checkpoint every 5,000 steps (pushed to the store, so a killed run resumes) + final. Log each loss term and the **collapse alarm** `z_std` = mean over dims of the batch std of z (CHECK: > 0.1).
 
 Smoke: 50 steps, batch 4 locally; on Kaggle 300 steps at full batch on the real data. Smoke REPORT includes it/s after warm-up, projected time for 30,000 steps, peak GPU memory, first vs last loss.
