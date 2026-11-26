@@ -1,6 +1,6 @@
 # PROGRESS
 
-**Current phase: 4 — Baselines (done locally; Aditya to push after `train_wm` full finishes, then run Kaggle `train_baselines` smoke, then full).** Phase 3 `train_wm` full is running on Kaggle.
+**Current phase: 4 — Baselines (done locally; Aditya to push after `train_wm` full finishes, run Kaggle `diagnose_wm`, then `train_baselines` smoke, then full).** Phase 3 `train_wm` full is running on Kaggle.
 
 ## Status
 | Phase | Status | Local smoke | Kaggle smoke | Kaggle full |
@@ -58,6 +58,7 @@
 - **BC details (Phase 4):** target = (logged action − pusher)/50 (clean actions if `use_clean_actions`); goal = frame min(t + k, episode end), k ~ U{5..30}; random shift = replicate-pad 4 + random crop, one shift per sample shared by its 4 images, drawn from the sampler generator; no shift at validation. Val CHECK: MSE < constant mean-train-action baseline. Params 2,528,482.
 - **Probe details (Phase 4):** trained on single train frames; val on val episodes; final errors on all 3,030 test frames (mean and median block px, block °, pusher px, plus the predict-train-mean baseline) saved in `ckpt-probe/train_summary.json` under `test`. Params 1,740,518.
 - **Smoke settings (Phase 4):** local 50 steps (batch 4 wm_1step/pixel, 8 BC, 16 probe), warm-up 5, val/ckpt every 25; Kaggle 300 steps at full batch, warm-up 30, val every 100, ckpt every 150.
+- **diagnose_wm (Phase 3 add-on, eval only):** job registered under Phase 3 (needs `pusht-data`, `ckpt-wm`; `config: null`, `makes: []`, so it never skips and never touches the store). It pulls the finished `ckpt-wm` (smoke falls back to `ckpt-wm-smoke`) and reports, train episodes vs val episodes (190–199): each loss term on 256 fixed windows per split (+ open-loop NMSE_k); single-frame encode→decode MSE on all pixels and on non-background pixels (any channel differs from the train mean frame by > 0.1, i.e. ~25/255), next to the mean-frame MSE on the same pixels; a ridge probe z → state (λ = 1.0, unpenalised bias, fit on ≤ 4,096 train frames, targets as the §7 probe incl. block CoG) on val frames and on imagined latents at k = 1, 5, 10 (beside real z_{t+k} and copy-last z_t); and a filmstrip of 8 val reconstructions. Writes `diagnose_wm.json` + `recon_filmstrip_val.png` to `outputs/diagnose_wm/` (and the filmstrip to W&B). Note: `var` is a batch statistic, computed over chunks of 64 windows (13·64 latents), as in validation.
 - **§3 termination:** never end an episode early; step all 100 actions even if `terminated`. (gym-pusht 0.1.8's `step()` does keep working after termination.) If it ever refuses, replace that episode with an extra train seed from 2000 upwards. Validation is always seeds 190–199; test is always 1000–1029.
 
 ## Installed versions (local)
@@ -70,7 +71,42 @@ python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, py
 - BC smoke `val_z_std` = 0.006 (50 CPU steps). No CHECK by design; watch it on the Kaggle full run.
 - **Mac only:** on import, macOS prints `objc ... Class SDL... is implemented in both cv2/.dylibs/libSDL2 and pygame/.dylibs/libSDL2` to stderr, because both OpenCV wheels bundle SDL2 on macOS. It's harmless with `SDL_VIDEODRIVER=dummy` and all tests pass. It doesn't occur on Kaggle/Colab (Linux).
 
-## Last REPORT (local smoke, train_baselines: 4 REPORTs)
+## Last REPORT (local smoke, diagnose_wm)
+```
+==================== RUN REPORT ====================
+job: diagnose_wm   mode: smoke   platform: local   device: cpu
+git: 8bdbfee-dirty   time: 11.1s   params: 4,184,899
+CHECKS
+ [PASS] ckpt_complete: ckpt-wm-smoke step 50 (complete: true)
+ [PASS] metrics_finite: all finite (no NaN/inf)
+METRICS
+ ckpt = ckpt-wm-smoke (step 50, git 33e7fa9-dirty)
+ data = pusht-data-smoke
+ val_source = train episode seed 1 (smoke: no val episodes)
+ windows = train 178 / val 89
+ loss_terms_train = loss 0.5370 rec 0.0212 lat 0.1428 img 0.0204 var 0.4812
+ loss_terms_val = loss 0.6585 rec 0.0216 lat 0.1291 img 0.0213 var 0.6027
+ nmse_train = k1 0.011 (copy 0.009) / k5 0.145 (copy 0.136) / k10 0.431 (copy 0.430)
+ nmse_val = k1 0.008 (copy 0.006) / k5 0.131 (copy 0.115) / k10 0.393 (copy 0.379)
+ recon_train = mse 0.02107 / non-background 0.05755 (mean-frame 0.05963; 5.2% of pixels; 202 frames)
+ recon_val = mse 0.02134 / non-background 0.06015 (mean-frame 0.06138; 5.9% of pixels; 101 frames)
+ ridge_train_fit = pusher 14.7 px / block 3.3 px / angle 3.3 deg (medians 10.3 / 2.7 / 2.0)
+ ridge_val = pusher 15.6 px / block 2.7 px / angle 3.3 deg (medians 9.1 / 2.1 / 1.8)
+ ridge_val_predict_mean = pusher 132.6 px / block 120.5 px / angle 61.6 deg (medians 132.8 / 131.7 / 40.4)
+ ridge_imagined_train_k1 = block 7.4 px / 5.1 deg, pusher 20.3 px (real z: 3.0 px / 2.5 deg / 13.9 px; copy-last: 5.2 px / 3.8 deg / 18.2 px)
+ ridge_imagined_train_k5 = block 32.6 px / 20.3 deg, pusher 61.6 px (real z: 2.9 px / 2.6 deg / 12.9 px; copy-last: 17.1 px / 11.3 deg / 40.9 px)
+ ridge_imagined_train_k10 = block 61.4 px / 36.6 deg, pusher 111.3 px (real z: 2.8 px / 3.5 deg / 12.7 px; copy-last: 32.9 px / 20.7 deg / 69.8 px)
+ ridge_imagined_val_k1 = block 7.2 px / 3.8 deg, pusher 22.2 px (real z: 2.4 px / 1.6 deg / 14.0 px; copy-last: 5.2 px / 2.9 deg / 20.0 px)
+ ridge_imagined_val_k5 = block 33.6 px / 11.9 deg, pusher 63.6 px (real z: 2.3 px / 1.8 deg / 12.4 px; copy-last: 19.4 px / 10.2 deg / 46.6 px)
+ ridge_imagined_val_k10 = block 62.6 px / 22.1 deg, pusher 113.7 px (real z: 2.1 px / 3.5 deg / 12.0 px; copy-last: 39.0 px / 20.2 deg / 80.0 px)
+SAVED
+ outputs/diagnose_wm/diagnose_wm.json
+ outputs/diagnose_wm/recon_filmstrip_val.png
+W&B: off
+====================================================
+```
+
+## Phase 4 local smoke REPORTs (train_baselines)
 ```
 ==================== RUN REPORT ====================
 job: train_wm_1step   mode: smoke   platform: local   device: cpu

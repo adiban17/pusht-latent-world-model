@@ -12,7 +12,7 @@ spec.loader.exec_module(run)
 def test_registry_well_formed():
     reg = run.load_registry()
     assert set(reg["jobs"]) == {
-        "env_check", "collect_data", "train_wm", "train_wm_1step", "train_pixel", "train_bc",
+        "env_check", "collect_data", "train_wm", "diagnose_wm", "train_wm_1step", "train_pixel", "train_bc",
         "train_probe", "eval_rollouts", "plan_val", "plan_sweep", "final_eval", "make_report",
     }
     for name, entry in reg["jobs"].items():
@@ -134,3 +134,25 @@ def test_train_baselines_group_smoke_then_skip(capsys, isolated_dirs):
 
     assert run.main(["--job", "train_baselines"]) == 0
     assert capsys.readouterr().out.count("already finished, skipping") == 4
+
+
+def test_diagnose_wm_smoke(capsys, isolated_dirs):
+    """diagnose_wm reads ckpt-wm(-smoke), writes its JSON + filmstrip, never skips, never trains."""
+    import json
+
+    assert run.main(["--job", "diagnose_wm"]) != 0           # no ckpt-wm yet -> FAIL, clear message
+    assert "run train_wm first" in capsys.readouterr().out
+    assert run.main(["--job", "collect_data"]) == 0
+    assert run.main(["--job", "train_wm"]) == 0
+    capsys.readouterr()
+    assert run.main(["--job", "diagnose_wm"]) == 0
+    out = capsys.readouterr().out
+    assert "[FAIL]" not in out and "loss_terms_val" in out and "ridge_imagined_val_k10" in out
+    job_dir = isolated_dirs / "outputs" / "diagnose_wm"
+    res = json.loads((job_dir / "diagnose_wm.json").read_text())
+    assert set(res["loss_terms"]["train"]) == {"loss", "rec", "lat", "img", "var"}
+    assert set(res["ridge_imagined"]["val"]) == {"k1", "k5", "k10"}
+    assert res["ckpt"]["name"] == "ckpt-wm-smoke" and res["ckpt"]["step"] == 50
+    assert (job_dir / "recon_filmstrip_val.png").exists()
+    assert run.main(["--job", "diagnose_wm"]) == 0           # makes nothing -> reruns, no skip
+    assert "already finished" not in capsys.readouterr().out

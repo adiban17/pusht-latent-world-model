@@ -23,6 +23,12 @@ jobs:
     config: configs/wm.yaml
     needs: [pusht-data]
     makes: [ckpt-wm]
+  diagnose_wm:          # eval only: train-vs-val loss terms, reconstruction, ridge probe on z
+    phase: 3
+    module: wm.jobs.diagnose_wm
+    config: null
+    needs: [pusht-data, ckpt-wm]
+    makes: []           # writes outputs only, so it reruns every time
   train_wm_1step:
     phase: 4
     module: wm.jobs.train_wm_1step
