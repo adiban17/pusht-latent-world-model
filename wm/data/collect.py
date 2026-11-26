@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 
 from wm.data.expert import ScriptedPusher
-from wm.envs.pusht import block_cog, get_state, make_env, render64
+from wm.envs.pusht import block_cog, circular_std_deg, get_state, make_env, render64, wrap_angles_rad
 
 CONTACT_POS_PX = 0.5
 CONTACT_ANG_DEG = 0.5
@@ -111,8 +111,7 @@ def health(arrays: dict[str, np.ndarray]) -> dict[str, Any]:
     states, mask = arrays["states"], step_mask(arrays)
     cog = block_cog(states)
     move = np.linalg.norm(cog[1:] - cog[:-1], axis=1)
-    dang = np.degrees(states[1:, 4] - states[:-1, 4])
-    turn = np.abs((dang + 180.0) % 360.0 - 180.0)
+    turn = np.abs(np.degrees(wrap_angles_rad(states[1:, 4] - states[:-1, 4])))
     contact = ((move > CONTACT_POS_PX) | (turn > CONTACT_ANG_DEG))[mask[:-1]]
 
     cells = np.clip((cog / (TABLE / GRID)).astype(int), 0, GRID - 1)
@@ -120,14 +119,14 @@ def health(arrays: dict[str, np.ndarray]) -> dict[str, Any]:
 
     acts, clean = arrays["actions"][mask], arrays["clean_actions"][mask]
     at_edge = (acts <= 0.0) | (acts >= TABLE)
-    angles = states[:, 4].astype(np.float64)
-    circ_std = np.sqrt(-2 * np.log(np.hypot(np.sin(angles).mean(), np.cos(angles).mean())))
+    angle_std_deg, angle_r = circular_std_deg(states[:, 4])  # wraps; unbounded (see docstring)
     return {
         "transitions": transitions(arrays),
         "episodes": len(arrays["episode_lengths"]),
         "contact_ratio": float(contact.mean()),
         "coverage_8x8": visited / GRID**2,
-        "block_angle_std_deg": float(np.degrees(circ_std)),
+        "block_angle_std_deg": angle_std_deg,
+        "block_angle_resultant_R": angle_r,
         "block_step_px_mean": float(move[mask[:-1]].mean()),
         "action_mean": [round(float(v), 2) for v in acts.mean(0)],
         "action_std": [round(float(v), 2) for v in acts.std(0)],

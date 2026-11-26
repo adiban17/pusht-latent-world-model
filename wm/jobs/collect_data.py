@@ -116,6 +116,7 @@ def run(ctx: JobContext, report: Report) -> None:
     report.metric("contact_ratio_test", f"{h_test['contact_ratio']:.3f}")
     report.metric("coverage_8x8", f"{h_train['coverage_8x8']:.3f}")
     report.metric("block_angle_std_deg", f"{h_train['block_angle_std_deg']:.1f}")
+    report.metric("block_angle_resultant_R", f"{h_train['block_angle_resultant_R']:.3f}")
     report.metric("block_step_px_mean", f"{h_train['block_step_px_mean']:.2f}")
     report.metric("action_mean", h_train["action_mean"])
     report.metric("action_std", h_train["action_std"])

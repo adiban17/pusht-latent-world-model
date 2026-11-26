@@ -47,6 +47,22 @@ def wrap_angle_rad(a: float) -> float:
     return float((a + np.pi) % (2 * np.pi) - np.pi)
 
 
+def wrap_angles_rad(a: np.ndarray) -> np.ndarray:
+    """Vectorised wrap of radians to [-pi, pi) (float64)."""
+    return (np.asarray(a, np.float64) + np.pi) % (2 * np.pi) - np.pi
+
+
+def circular_std_deg(angles_rad: np.ndarray) -> tuple[float, float]:
+    """(circular std in degrees, mean resultant length R) of angles in radians.
+
+    std = sqrt(-2 ln R). It is unbounded: R -> 0 (orientations spread evenly around the circle)
+    gives values well above 180 deg, e.g. R = 0.027 -> 154 deg. It is NOT bounded by 180.
+    """
+    a = wrap_angles_rad(angles_rad)
+    r = float(np.hypot(np.sin(a).mean(), np.cos(a).mean()))
+    return float(np.degrees(np.sqrt(-2.0 * np.log(max(r, 1e-12))))), r
+
+
 def wrap_angle_deg(a: float) -> float:
     """Wrap degrees to [-180, 180)."""
     return float((a + 180.0) % 360.0 - 180.0)
@@ -132,6 +148,6 @@ def denormalize_pos(x: np.ndarray) -> np.ndarray:
 
 
 def angle_features(theta: np.ndarray) -> np.ndarray:
-    """Angle (rad) -> [..., 2] = (sin, cos)."""
+    """Angle (rad, wrapped or not) -> [..., 2] = (sin, cos). Never feed raw angles to a model."""
     theta = np.asarray(theta, np.float32)
     return np.stack([np.sin(theta), np.cos(theta)], axis=-1)

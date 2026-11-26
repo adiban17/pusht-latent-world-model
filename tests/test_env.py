@@ -96,3 +96,28 @@ def test_normalisation_roundtrips():
 
     sc = E.angle_features(np.array([0.0, np.pi / 2]))
     np.testing.assert_allclose(sc, [[0, 1], [1, 0]], atol=1e-6)
+
+
+def test_angle_3pi_is_wrapped_everywhere(env):
+    """An unwrapped angle of 3*pi (pymunk accumulates rotation) behaves exactly like pi."""
+    state = np.array([100.0, 100.0, 300.0, 300.0, 0.0], np.float32)
+    E.reset_to_state(env, state)
+    env.unwrapped.block.angle = 3 * np.pi
+    got = E.get_state(env)
+    assert -np.pi <= got[4] < np.pi and abs(abs(got[4]) - np.pi) < 1e-5
+    s3 = state.copy(); s3[4] = 3 * np.pi
+    s1 = state.copy(); s1[4] = np.pi
+    pos_px, ang_deg = E.pose_error(s3, s1)
+    assert pos_px < 1e-3 and abs(ang_deg) < 1e-3  # float32 rounding of 3*pi only
+    np.testing.assert_allclose(E.angle_features(3 * np.pi), E.angle_features(np.pi), atol=1e-6)
+    assert abs(abs(E.wrap_angles_rad(3 * np.pi)) - np.pi) < 1e-9
+
+
+def test_circular_std():
+    std, r = E.circular_std_deg(np.zeros(10))
+    assert std < 1e-3 and r == pytest.approx(1.0)
+    std_w, _ = E.circular_std_deg(np.array([0.1, -0.1, 0.1 + 2 * np.pi, -0.1 + 4 * np.pi]))
+    std_u, _ = E.circular_std_deg(np.array([0.1, -0.1, 0.1, -0.1]))
+    assert std_w == pytest.approx(std_u)
+    spread, r = E.circular_std_deg(np.linspace(-np.pi, np.pi, 1000, endpoint=False) + 0.01)
+    assert r < 0.01 and spread > 170  # unbounded: near-uniform angles exceed 154 deg

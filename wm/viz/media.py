@@ -6,7 +6,7 @@ from pathlib import Path
 import imageio.v2 as imageio
 import numpy as np
 
-from wm.envs.pusht import block_cog
+from wm.envs.pusht import block_cog, wrap_angles_rad
 
 
 def upscale(frames: np.ndarray, scale: int) -> np.ndarray:
@@ -46,7 +46,7 @@ def save_histograms(arrays: dict[str, np.ndarray], path: str | Path) -> Path:
     move = np.linalg.norm(cog[1:] - cog[:-1], axis=1)[keep[:-1]]
     panels = [
         ("block centre x (px)", cog[:, 0]), ("block centre y (px)", cog[:, 1]),
-        ("block angle (deg)", np.degrees(states[:, 4])),
+        ("block angle (deg)", np.degrees(wrap_angles_rad(states[:, 4]))),
         ("action x (px)", arrays["actions"][keep, 0]), ("action y (px)", arrays["actions"][keep, 1]),
         ("block movement per step (px)", move),
     ]

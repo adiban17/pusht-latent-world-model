@@ -122,3 +122,13 @@ def test_health_contact_and_coverage():
     assert h["transitions"] == 4
     far = hand_arrays([[32, 32], [480, 480]], [0, 0])
     assert C.health(far)["coverage_8x8"] == pytest.approx(2 / 64)
+
+
+def test_health_angle_stats_wrap_3pi():
+    """Unwrapped angles (pi + 2k*pi) give the same angle std and contact as wrapped ones."""
+    cog = [[100, 100], [100, 100], [100, 100]]
+    wrapped = C.health(hand_arrays(cog, [180.0, 180.0, 170.0]))
+    raw = C.health(hand_arrays(cog, [540.0, -180.0, 170.0]))
+    assert raw["block_angle_std_deg"] == pytest.approx(wrapped["block_angle_std_deg"], abs=1e-3)
+    assert raw["contact_ratio"] == pytest.approx(wrapped["contact_ratio"])
+    assert raw["contact_ratio"] == pytest.approx(0.5)  # 540 -> -180 is no turn
