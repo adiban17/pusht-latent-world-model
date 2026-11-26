@@ -13,7 +13,7 @@ def _report():
 
 def test_layout():
     lines = _report().render(elapsed=3.21).splitlines()
-    assert lines[0] == "================ PASTE THIS TO CLAUDE ================" == HEADER
+    assert lines[0] == "==================== RUN REPORT ====================" == HEADER
     assert lines[-1] == FOOTER and len(FOOTER) == len(HEADER) and set(FOOTER) == {"="}
     assert lines[1] == "job: env_check   mode: smoke   platform: local   device: cpu"
     assert lines[2] == "git: abc1234   time: 3.2s   params: n/a"

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-HEADER = "================ PASTE THIS TO CLAUDE ================"
+HEADER = "==================== RUN REPORT ===================="
 FOOTER = "=" * len(HEADER)
 STATUSES = ("PASS", "WARN", "FAIL")
 

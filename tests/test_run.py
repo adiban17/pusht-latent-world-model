@@ -64,7 +64,7 @@ def test_collect_data_smoke_then_skip(capsys, isolated_dirs):
 def test_env_check_runs_then_skips_then_force(capsys, isolated_dirs):
     assert run.main(["--job", "env_check", "--mode", "smoke"]) == 0
     out = capsys.readouterr().out
-    assert "PASTE THIS TO CLAUDE" in out and "[FAIL]" not in out
+    assert "RUN REPORT" in out and "[FAIL]" not in out
     assert (isolated_dirs / "outputs" / "env_check" / "frame.png").exists()
     assert (isolated_dirs / "outputs" / "env_check" / "REPORT.md").exists()
 
@@ -72,4 +72,4 @@ def test_env_check_runs_then_skips_then_force(capsys, isolated_dirs):
     assert "already finished, skipping" in capsys.readouterr().out
 
     assert run.main(["--job", "env_check", "--force"]) == 0
-    assert "PASTE THIS TO CLAUDE" in capsys.readouterr().out
+    assert "RUN REPORT" in capsys.readouterr().out

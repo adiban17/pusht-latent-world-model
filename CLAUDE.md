@@ -210,7 +210,7 @@ Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decode
 
 **REPORT (`wm/report.py`):** every job ends by printing exactly this layout and saving it to `<out_dir>/<job>/REPORT.md`; exit code ≠ 0 if any FAIL:
 ```
-================ PASTE THIS TO CLAUDE ================
+==================== RUN REPORT ====================
 job: <job>   mode: <smoke|full>   platform: <local|kaggle|colab>   device: <cpu | GPU name>
 git: <short hash>[-dirty]   time: <wall clock>   params: <if relevant>
 CHECKS
@@ -220,7 +220,7 @@ METRICS
 SAVED
  <artifact name:version or local path> ...
 W&B: <run URL or "off">
-======================================================
+====================================================
 ```
 
 **Runner notebook (`notebooks/runner.ipynb`):** exactly three code cells:
