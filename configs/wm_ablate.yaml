@@ -1,8 +1,9 @@
 # Phase 3b ablation of world-model fixes (job wm_ablate). Short runs on the full data, same seed.
-# Each variant = base_config (configs/wm.yaml) + its overrides + the `train` overrides below.
+# Each variant = base_config (configs/wm_v1.yaml, the v1 recipe;
+# the ablation ran when that file was configs/wm.yaml) + its overrides + the `train` overrides below.
 # Three training runs give four table rows: AB is trained once with keep_best, and both its
 # last weights ("A+B") and its best-val-NMSE@10 weights ("A+B+C") are evaluated.
-base_config: configs/wm.yaml
+base_config: configs/wm_v1.yaml
 variants:
   v1: {}                                   # the Phase 3 model as trained on Kaggle (all off)
   A: {fg_weight: true}                     # foreground-weighted rec + img losses

@@ -90,8 +90,12 @@ jobs:
     needs: []
     makes: []
 
-# A group runs its jobs in order; each one is skipped if already complete.
+# A group runs its jobs in order and stops at the first failure; each job is skipped if
+# already complete (diagnose_wm makes nothing, so it always reruns; it only evaluates).
 groups:
   train_baselines:
     phase: 4
     jobs: [train_wm_1step, train_pixel, train_bc, train_probe]
+  overnight:            # one long Kaggle session: the world model, its diagnosis, then the baselines
+    phase: 4            # (a member that is a group is expanded in place)
+    jobs: [train_wm, diagnose_wm, train_baselines]

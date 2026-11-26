@@ -86,7 +86,8 @@ def test_keep_best_picks_min_nmse_and_resumes_identically(data):
 def test_v1_has_no_best_key_and_unchanged_log_keys(data):
     t = tcfg(steps=4, warmup_steps=2, val_every=4, ckpt_every=2)
     saved = []
-    res = run_training(fresh_model(), data, t, torch.device("cpu"), W,
+    v1 = build_world_model(load_yaml(REPO_ROOT / "configs/wm_v1.yaml"))
+    res = run_training(v1, data, t, torch.device("cpu"), W,
                        on_checkpoint=lambda s: saved.append(s))
     assert "best" not in res and "best" not in res["state"] and "best" not in saved[0]
     assert set(res["log"][0]) == {"loss", "rec", "lat", "img", "var", "z_std", "lr"}

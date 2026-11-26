@@ -60,7 +60,7 @@ def load_data() -> dict[str, np.ndarray]:
 
 def run_variant(name: str, threads: int) -> dict:
     torch.set_num_threads(threads)
-    cfg = copy.deepcopy(load_yaml(REPO_ROOT / "configs/wm.yaml"))
+    cfg = copy.deepcopy(load_yaml(REPO_ROOT / "configs/wm_v1.yaml"))
     v = VARIANTS[name]
     for k in ("input_mean_frame", "detach_dynamics_inputs"):
         if k in v:

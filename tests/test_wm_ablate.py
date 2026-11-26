@@ -6,7 +6,7 @@ from wm.jobs import wm_ablate as job
 from wm.repro import REPO_ROOT, load_yaml
 
 ABL = load_yaml(REPO_ROOT / "configs/wm_ablate.yaml")
-BASE = load_yaml(REPO_ROOT / "configs/wm.yaml")
+BASE = load_yaml(REPO_ROOT / ABL["base_config"])   # configs/wm_v1.yaml
 
 
 def test_variant_config_merge():
@@ -24,6 +24,7 @@ def test_variant_config_merge():
     assert {k: v for k, v in v1.items() if k not in ("train", "smoke")} == \
            {k: v for k, v in BASE.items() if k not in ("train", "smoke")}
     assert "fg_weight" not in BASE                      # base config untouched
+    assert ABL["base_config"] == "configs/wm_v1.yaml"
 
 
 def row(label, block, block_copy, ang, ang_copy, pusher_ridge=50.0, p_hat=None):

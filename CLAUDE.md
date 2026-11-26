@@ -108,7 +108,7 @@ Tuning is time-boxed to 90 minutes (Phase 2). Only adjust the numeric parameters
 | Dynamics | φ = Linear(256+2 → 256) + SiLU; `GRUCell(256, 320)`; out = Linear(320 → 256) giving Δ; ẑ_next = LN(ẑ + Δ) (same non-affine LayerNorm) |
 | Decoder | Linear 256→4096, reshape 256×4×4, ConvTranspose2d(k=4, s=2, p=1) 256→128→64→32→3 with SiLU between (none at the end) |
 
-Expected parameter counts (assert in a test; print at startup): encoder 1,738,976; decoder 1,742,563; dynamics 703,360; **total 4,184,899**; planner path (encoder + dynamics) 2,442,336.
+Expected parameter counts (assert in a test; print at startup) for the default recipe (`wm.yaml` = A+B, see the Phase 3b decision below): encoder 1,738,976; decoder 1,742,563; dynamics 704,514; **total 4,186,053**; planner path (encoder + dynamics) 2,443,490. The v1 model as specified in the table above (`wm_v1.yaml`, no proprio) has dynamics 703,360, total 4,184,899, planner 2,442,336.
 
 Window = 13 frames o[t−2..t+10] and 12 actions a[t−2..t+9]; context C = 3, horizon H = 10.
 - z_j = E(o_j) for all 13 frames.
@@ -120,7 +120,9 @@ Loss (element means): `λ_rec·MSE(D(z_j), o_j)` over all 13 frames + `λ_lat·m
 
 **Decision (Phase 3, 2026-11-26):** add a VICReg-style variance hinge `λ_var·mean_d relu(1 − std_batch(z_d))` (std over all 13·B latents of the batch, +1e-4 inside the sqrt), λ_var = 1.0. Without it the spec'd model collapses (z_std ≈ 0.003: every frame encodes to nearly the same latent). Chosen from a 5-variant local comparison (`results/ablation_collapse_local.json`, `scripts/compare_collapse_fixes.py`). Architecture and parameter counts are unchanged.
 
-**Phase 3b options (2026-11-26; config flags, all off by default, so `wm.yaml` is the model above):** (A) `fg_weight`: rec/img loss weight w = 1 + 20·mask, mask = |frame − train mean frame| > 25/255 in any channel; (B) `proprio`: pusher position p is model state, dynamics input [z, p, a], extra head Linear(320 → 2) (zero-init) predicts p' = p + Δp with MSE weight 1.0, rollouts feed back p̂, `rollout(..., p0=p) -> (z_hat, p_hat)`; total params 4,186,053 (planner 2,443,490); (C) `keep_best`: keep the checkpoint with the best val NMSE@10 and record `best_step`. Job `wm_ablate` compares them (PROGRESS.md has the pre-registered selection rule).
+**Phase 3b options (2026-11-26; config flags, all off in code by default and in `wm_v1.yaml`):** (A) `fg_weight`: rec/img loss weight w = 1 + 20·mask, mask = |frame − train mean frame| > 25/255 in any channel; (B) `proprio`: pusher position p is model state, dynamics input [z, p, a], extra head Linear(320 → 2) (zero-init) predicts p' = p + Δp with MSE weight 1.0, rollouts feed back p̂, `rollout(..., p0=p) -> (z_hat, p_hat)`; total params 4,186,053 (planner 2,443,490); (C) `keep_best`: keep the checkpoint with the best val NMSE@10 and record `best_step`. Job `wm_ablate` compares them (PROGRESS.md has the pre-registered selection rule).
+
+**Decision (Phase 3b, 2026-11-27): adopt A+B; not C.** Kaggle `wm_ablate` full (commit ffd775a, source `results/ablation_wm_fixes.json`; table in PROGRESS.md) picked **A+B** by the pre-registered rule: it beats copy-last on imagined block px at k = 10 on val and its imagined angle error is no worse than copy-last's. C (`keep_best`, selected by val NMSE@10) was not adopted: the NMSE-selected weights were physically worse than the last ones, so NMSE@10 is not a reliable checkpoint-selection metric here. `wm.yaml` and `wm_1step.yaml` set `fg_weight: true`, `proprio: true`, `keep_best: false` (they still differ only in `teacher_forcing`); the Phase 3 recipe is kept as `wm_v1.yaml`, and Kaggle `ckpt-wm:v5` is that v1 model. Consequences: the planner path takes the pusher position (`warmup(z, a, p_ctx)`, `rollout(z0, h, a, p0=p) -> (z_hat, p_hat)`); the planning cost still uses only the image latent z_g.
 
 Training: batch 64 windows; AdamW lr 3e-4, wd 1e-4; 500-step linear warm-up then cosine; 30,000 steps (full); fp16 autocast + GradScaler; grad-clip 1.0; validation every 1,000 steps on val episodes; checkpoint every 5,000 steps (pushed to the store, so a killed run resumes) + final. Log each loss term and the **collapse alarm** `z_std` = mean over dims of the batch std of z (CHECK: > 0.1).
 
@@ -130,7 +132,7 @@ Full REPORT includes final losses, val NMSE at k = 1, 5, 10 for the model and fo
 
 Data loading: load the whole npz onto the GPU as uint8 tensors once; sample (episode, start) indices and gather windows on-GPU. No DataLoader.
 
-Planning API: `wm.encode(frames)`, `wm.warmup(z_ctx, a_ctx) -> h`, `wm.rollout(z0, h, actions[B,H,2]) -> z_hat[B,H,256]` (batched), `wm.decode(z)`.
+Planning API: `wm.encode(frames)`, `wm.warmup(z_ctx, a_ctx, p_ctx) -> h`, `wm.rollout(z0, h, actions[B,H,2], p0=p) -> (z_hat[B,H,256], p_hat[B,H,2])` (batched; a v1 model without proprio takes no p and returns z_hat only), `wm.decode(z)`.
 
 ## 5. Pixel baseline (`wm/models/pixel_unet.py`, job `train_pixel`)
 - Input: 3 context frames stacked (9 ch) + action tiled as 2 constant channels = 11 ch, 64×64.
@@ -205,6 +207,7 @@ Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decode
 | `train_wm` | 3 | `pusht-data` | `ckpt-wm` |
 | `wm_ablate` | 3b | `pusht-data` | `results-wm-ablate` (+ `results/ablation_wm_fixes.json`) |
 | `train_baselines` | 4 | `pusht-data` | `ckpt-wm-1step`, `ckpt-pixel`, `ckpt-bc`, `ckpt-probe` |
+| `overnight` (group) | 4 | `pusht-data` | `train_wm` → `diagnose_wm` → `train_baselines`, each skipped if complete |
 | `eval_rollouts` | 5 | data + `ckpt-wm`, `ckpt-wm-1step`, `ckpt-pixel`, `ckpt-probe` | `results-rollouts` |
 | `plan_val` | 6 | data + `ckpt-wm`, `ckpt-wm-1step`, `ckpt-bc` (+ makes `eval-pairs` if missing) | `results-plan-val` |
 | `plan_sweep` | 6 | as `plan_val` | `results-plan-sweep` |

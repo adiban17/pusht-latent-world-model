@@ -15,7 +15,7 @@ from wm.models.world_model import build_world_model
 from wm.repro import REPO_ROOT, load_yaml, seed_all
 from wm.train.common import resolve_config
 from wm.train.train_wm import prepare_model, run_training
-abl = load_yaml(REPO_ROOT / "configs/wm_ablate.yaml"); base = load_yaml(REPO_ROOT / "configs/wm.yaml")
+abl = load_yaml(REPO_ROOT / "configs/wm_ablate.yaml"); base = load_yaml(REPO_ROOT / "configs/wm_v1.yaml")
 with np.load("store/pusht-data-smoke/files/pusht_train.npz") as d: arrays = {k: d[k] for k in d.files}
 data = WindowData(arrays, "cpu", base["val"]["seeds"])
 for name, zero in [("A", False), ("AB", False), ("AB", True)]:

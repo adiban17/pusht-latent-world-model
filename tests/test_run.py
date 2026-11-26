@@ -22,6 +22,9 @@ def test_registry_well_formed():
         "train_wm_1step", "train_pixel", "train_bc", "train_probe"]
     for member in reg["groups"]["train_baselines"]["jobs"]:
         assert member in reg["jobs"]
+    assert reg["groups"]["overnight"]["jobs"] == ["train_wm", "diagnose_wm", "train_baselines"]
+    assert run.expand_group("overnight", reg["groups"]) == [
+        "train_wm", "diagnose_wm", "train_wm_1step", "train_pixel", "train_bc", "train_probe"]
 
 
 def test_full_refused_locally(capsys):
@@ -100,7 +103,7 @@ def test_train_wm_smoke_resume_then_skip(capsys, isolated_dirs, monkeypatch):
     code = run.main(["--job", "train_wm"])
     out = capsys.readouterr().out
     assert code == 0, out
-    assert "params: 4,184,899" in out and "resumed_from_step = 25" in out
+    assert "params: 4,186,053" in out and "resumed_from_step = 25" in out   # A+B (proprio) recipe
     assert "[PASS] param_counts" in out and "[FAIL]" not in out
     meta = json.loads(meta_path.read_text())
     assert meta["complete"] is True and meta["step"] == 50
@@ -148,9 +151,12 @@ def test_diagnose_wm_smoke(capsys, isolated_dirs):
     assert run.main(["--job", "diagnose_wm"]) == 0
     out = capsys.readouterr().out
     assert "[FAIL]" not in out and "loss_terms_val" in out and "ridge_imagined_val_k10" in out
+    assert "p_hat_pusher_val" in out                         # wm.yaml is the proprio (A+B) model
     job_dir = isolated_dirs / "outputs" / "diagnose_wm"
     res = json.loads((job_dir / "diagnose_wm.json").read_text())
-    assert set(res["loss_terms"]["train"]) == {"loss", "rec", "lat", "img", "var"}
+    assert set(res["loss_terms"]["train"]) == {"loss", "rec", "lat", "img", "var", "proprio"}
+    assert res["proprio"] is True and set(res["p_hat_pusher"]["val"]) == {"k1", "k5", "k10"}
+    assert res["p_hat_pusher"]["val"]["k10"]["copy_last_mean"] > 0
     assert set(res["ridge_imagined"]["val"]) == {"k1", "k5", "k10"}
     assert res["ckpt"]["name"] == "ckpt-wm-smoke" and res["ckpt"]["step"] == 50
     assert (job_dir / "recon_filmstrip_val.png").exists()

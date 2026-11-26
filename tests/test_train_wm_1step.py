@@ -21,6 +21,8 @@ def test_config_differs_only_in_teacher_forcing():
     assert {k: v for k, v in WM.items() if k != "teacher_forcing"} == \
            {k: v for k, v in ONE.items() if k != "teacher_forcing"}
     assert ONE["loss"]["var"] == 1.0                         # keeps the variance hinge
+    assert ONE["fg_weight"] is True and ONE["proprio"] is True   # same A+B recipe as wm.yaml
+    assert ONE["keep_best"] is False and ONE["loss"]["proprio"] == 1.0
 
 
 def test_config_hash_differs_from_train_wm():

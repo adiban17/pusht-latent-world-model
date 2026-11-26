@@ -1,4 +1,5 @@
-# Latent world model (CLAUDE.md §4): CNN encoder + GRU dynamics + decoder.
+# Latent world model (CLAUDE.md §4): CNN encoder + GRU dynamics + decoder, with the Phase 3b
+# A+B options on. The Phase 3 v1 recipe is configs/wm_v1.yaml.
 seed: 0
 model:
   latent_dim: 256
@@ -8,11 +9,18 @@ window:
   context: 3          # frames t-2, t-1, t
   horizon: 10         # predict t+1 .. t+10
 teacher_forcing: false  # wm_1step.yaml (Phase 4) sets this to true
+# Phase 3b decision (wm_ablate full, results/ablation_wm_fixes.json): A+B is the recipe.
+fg_weight: true      # (A) rec/img loss weight 1 + fg_alpha * foreground mask
+fg_alpha: 20.0
+fg_threshold: 0.0980392156862745   # 25/255, any channel vs the train mean frame
+proprio: true        # (B) pusher position is model state; dynamics see [z, p, a] and predict p
+keep_best: false     # (C) not adopted: NMSE@10-selected weights were physically worse
 loss:
   rec: 1.0            # lambda_rec: decoder reconstruction of all 13 frames
   lat: 0.1            # lambda_lat: latent prediction vs detached encoder latents
   img: 1.0            # lambda_img: decoded predictions vs real frames
   var: 1.0            # lambda_var: variance hinge on z (Phase 3 decision; stops latent collapse)
+  proprio: 1.0        # (B) MSE of p_hat vs the real pusher position
 var_target: 1.0       # hinge target for the per-dim batch std of z
 train:
   batch_size: 64

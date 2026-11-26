@@ -5,7 +5,8 @@ from wm.models.encoder import latent_norm
 from wm.models.world_model import EXPECTED_PARAMS, WorldModel, build_world_model, param_counts
 from wm.repro import REPO_ROOT, load_yaml
 
-CFG = load_yaml(REPO_ROOT / "configs/wm.yaml")
+CFG = load_yaml(REPO_ROOT / "configs/wm_v1.yaml")      # the §4 model as written (all Phase 3b flags off)
+WM_CFG = load_yaml(REPO_ROOT / "configs/wm.yaml")    # the adopted A+B recipe
 
 
 def test_param_counts_exact():
@@ -98,12 +99,18 @@ def test_variance_term_only_in_loss_when_weighted():
 from wm.models.world_model import EXPECTED_PARAMS_PROPRIO  # noqa: E402
 
 
-def test_phase3b_flags_default_off_and_absent_from_wm_yaml():
+def test_phase3b_flags_default_off_and_absent_from_wm_v1_yaml():
     m = build_world_model(CFG)
     assert m.fg_mean is None and not m.proprio and not hasattr(m.dynamics, "p_out")
     for k in ("fg_weight", "fg_alpha", "fg_threshold", "proprio", "keep_best"):
         assert k not in CFG
     assert "proprio" not in CFG["loss"]
+
+
+def test_wm_yaml_builds_the_a_plus_b_model():
+    m = build_world_model(WM_CFG)
+    assert m.proprio and m.fg_mean is not None and m.fg_alpha == 20.0
+    assert param_counts(m) == EXPECTED_PARAMS_PROPRIO
 
 
 def test_proprio_param_counts():

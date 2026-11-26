@@ -6,7 +6,9 @@ episodes (seeds 190-199):
   2. single-frame encode -> decode MSE, all pixels and non-background pixels only;
   3. a ridge probe z -> state fit on train frames, evaluated on val frames, and applied to the
      imagined latents at k = 1, 5, 10 (next to real z_{t+k} and copy-last z_t);
-  4. a filmstrip of encode -> decode reconstructions of 8 val frames.
+  4. a filmstrip of encode -> decode reconstructions of 8 val frames;
+  5. for a proprio model (Phase 3b B), the pusher error of the predicted p_hat at k = 1, 5, 10
+     (next to copy-last p_t); its loss terms include `proprio`.
 Writes diagnose_wm.json + recon_filmstrip_val.png to the job's output dir. Nothing is trained,
 nothing goes to the store (jobs.yaml `makes: []`, so it reruns every time).
 """
@@ -23,8 +25,8 @@ import torch
 
 from wm.data.windows import WindowData, episode_frames, frames_to_model, split_episodes
 from wm.envs.pusht import denormalize_image
-from wm.eval.diagnose import (TERMS, encode_frames, imagined_probe, recon_errors, ridge_probe,
-                              subset, window_terms)
+from wm.eval.diagnose import (TERMS, encode_frames, imagined_probe, pusher_errors, recon_errors,
+                              ridge_probe, subset, window_terms)
 from wm.eval.rollouts import latent_nmse
 from wm.jobs import JobContext
 from wm.jobs._trainer import load_npz
@@ -79,9 +81,9 @@ def run(ctx: JobContext, report: Report) -> None:
     # ---- 1. loss terms + open-loop NMSE on train vs val windows ----
     z_ref = encode_frames(model, data.frames[val_frames.to(device)])
     splits = {"train": subset(data.train_starts, WINDOWS), "val": subset(data.val_starts, WINDOWS)}
-    terms, nmse, windows = {}, {}, {}
+    terms, nmse, windows, p_hats = {}, {}, {}, {}
     for split, ws in splits.items():
-        terms[split], z, z_hat = window_terms(model, data, ws, weights)
+        terms[split], z, z_hat, p_hats[split] = window_terms(model, data, ws, weights, with_p=True)
         nmse[split] = {"model": latent_nmse(z_hat, z[:, c:], z_ref).tolist(),
                        "copy_last": latent_nmse(z[:, c - 1:c].expand_as(z[:, c:]), z[:, c:], z_ref).tolist()}
         windows[split] = (ws, z, z_hat)
@@ -96,6 +98,10 @@ def run(ctx: JobContext, report: Report) -> None:
     w, ridge = ridge_probe(z_tr, states[train_frames.numpy()], z_ref, states[val_frames.numpy()], RIDGE_LAMBDA)
     imagined = {split: imagined_probe(w, ws.numpy(), z, z_hat, states, c, KS)
                 for split, (ws, z, z_hat) in windows.items()}
+
+    # ---- 5. predicted pusher position (proprio model only) ----
+    pusher = ({split: pusher_errors(p_hats[split], windows[split][0].numpy(), states, c, KS)
+               for split in splits} if model.proprio else None)
 
     # ---- 4. reconstruction filmstrip of 8 val frames ----
     pick = val_frames[np.linspace(0, len(val_frames) - 1, FILM_FRAMES).round().astype(int)].to(device)
@@ -116,7 +122,8 @@ def run(ctx: JobContext, report: Report) -> None:
         "wm_config": cfg, "params": counts, "data": data_name, "val_source": data.val_source,
         "settings": {"windows": WINDOWS, "max_train_frames": MAX_FRAMES, "ridge_lambda": RIDGE_LAMBDA,
                      "fg_threshold": 0.1, "ks": list(KS)},
-        "loss_terms": terms, "nmse": nmse, "recon": recon, "ridge": ridge, "ridge_imagined": imagined,
+        "proprio": model.proprio, "loss_terms": terms, "nmse": nmse, "recon": recon, "ridge": ridge,
+        "ridge_imagined": imagined, "p_hat_pusher": pusher,
         "wall_clock_s": time.time() - t0,
     }
     json_path = ctx.out_dir / "diagnose_wm.json"
@@ -126,16 +133,18 @@ def run(ctx: JobContext, report: Report) -> None:
     complete = bool(ckpt_meta.get("complete"))
     report.check("ckpt_complete", "PASS" if complete else "WARN",
                  f"{ckpt_name} step {blob.get('step')}", "complete: true")
-    ok = all_finite({k: results[k] for k in ("loss_terms", "nmse", "recon", "ridge", "ridge_imagined")})
+    ok = all_finite({k: results[k] for k in ("loss_terms", "nmse", "recon", "ridge", "ridge_imagined",
+                                             "p_hat_pusher") if results[k] is not None})
     report.check_true("metrics_finite", ok, "all finite" if ok else "NaN/inf", "no NaN/inf")
 
     report.metric("ckpt", f"{ckpt_name} (step {blob.get('step')}, git {blob.get('git')})")
     report.metric("data", data_name)
     report.metric("val_source", data.val_source)
+    report.metric("proprio", model.proprio)
     report.metric("windows", f"train {len(splits['train'])} / val {len(splits['val'])}")
     for split in ("train", "val"):
         tt = terms[split]
-        report.metric(f"loss_terms_{split}", " ".join(f"{k} {tt[k]:.4f}" for k in TERMS))
+        report.metric(f"loss_terms_{split}", " ".join(f"{k} {v:.4f}" for k, v in tt.items()))
     for split in ("train", "val"):
         report.metric(f"nmse_{split}", " / ".join(
             f"k{k} {nmse[split]['model'][k - 1]:.3f} (copy {nmse[split]['copy_last'][k - 1]:.3f})" for k in KS))
@@ -156,5 +165,10 @@ def run(ctx: JobContext, report: Report) -> None:
                           f"(real z: {e['real_z']['block_px_mean']:.1f} px / {e['real_z']['block_deg_mean']:.1f} deg / "
                           f"{e['real_z']['pusher_px_mean']:.1f} px; copy-last: {e['copy_last']['block_px_mean']:.1f} px / "
                           f"{e['copy_last']['block_deg_mean']:.1f} deg / {e['copy_last']['pusher_px_mean']:.1f} px)")
+    if pusher is not None:
+        for split in ("train", "val"):
+            report.metric(f"p_hat_pusher_{split}", " / ".join(
+                f"k{k} {pusher[split][f'k{k}']['p_hat_mean']:.1f} px (copy {pusher[split][f'k{k}']['copy_last_mean']:.1f})"
+                for k in KS))
     report.save(json_path)
     report.save(strip_path)

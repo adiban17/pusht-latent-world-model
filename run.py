@@ -51,6 +51,14 @@ def is_finished(store, entry: dict[str, Any], chash: str) -> bool:
     return True
 
 
+def expand_group(name: str, groups: dict[str, Any]) -> list[str]:
+    """The jobs of a group in order; a member that is itself a group is expanded in place."""
+    out: list[str] = []
+    for member in groups[name]["jobs"]:
+        out += expand_group(member, groups) if member in groups else [member]
+    return out
+
+
 def run_job(name: str, mode: str, force: bool, registry: dict[str, Any]) -> int:
     """Run one job; returns its exit code."""
     entry = registry["jobs"][name]
@@ -112,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
     registry = load_registry()
     groups = registry.get("groups", {})
     if args.job in groups:
-        for member in groups[args.job]["jobs"]:
+        for member in expand_group(args.job, groups):
             code = run_job(member, args.mode, args.force, registry)
             if code != 0:
                 return code
