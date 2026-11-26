@@ -1,12 +1,12 @@
 # PROGRESS
 
-**Current phase: 2 — Expert + data (done locally; Aditya to confirm filmstrips, then Kaggle smoke + full).**
+**Current phase: 3 — World model (starting).**
 
 ## Status
 | Phase | Status | Local smoke | Kaggle smoke | Kaggle full |
 | --- | --- | --- | --- | --- |
 | 1 Foundation | done | PASS | PASS | n/a |
-| 2 Expert + data | done locally | PASS | pending | pending |
+| 2 Expert + data | **complete** | PASS | PASS | PASS |
 | 3 World model | not started | – | – | – |
 | 4 Baselines | not started | – | – | – |
 | 5 Rollout eval | not started | – | – | – |
@@ -31,6 +31,9 @@
 - **Expert detour detail (Phase 2):** the detour side is fixed when the detour starts; once the detour point is reached (≤ 15 px) the pusher heads to c without re-checking the far-side test until it is back on the near side (otherwise it would re-trigger the detour at the detour point and stall).
 - **Expert tuning (Phase 2):** none needed. The §2 numbers as written give contact ratio **48.4%** on 20 episodes (seeds 0–19, `scripts/scratch_tune_expert.py`), 8×8 coverage 70%, angle std 114°; filmstrips show the T being pushed. `configs/data.yaml` keeps the spec values.
 - **`scripts/scratch_tune_expert.py`** is a tool, not part of the pipeline (no npz, no store).
+- **Phase 2 complete:** Kaggle `collect_data` full PASSED at commit f433e2b: 20,000 train / 3,000 test transitions, 10 val episodes, contact ratio 49.8% train / 48.2% test, coverage 0.984, artifact `pusht-data:v0`. Filmstrip gate passed (3 of 3 show the T being pushed).
+- **Block angle std (fix commit ecb977d):** the full-data `block_angle_std_deg` = 154° is not a bug. Stored angles were already wrapped, and the circular std √(−2 ln R) is unbounded (R ≈ 0.027, near-uniform orientations, gives 154°). Helpers `wrap_angles_rad` / `circular_std_deg` now wrap explicitly everywhere, `block_angle_resultant_R` is reported too, and there are tests with an angle of 3π. Models only ever see the angle as (sin, cos).
+- **REPORT header** is now `RUN REPORT` (was "PASTE THIS TO CLAUDE").
 - **§3 termination:** never end an episode early; step all 100 actions even if `terminated`. (gym-pusht 0.1.8's `step()` does keep working after termination.) If it ever refuses, replace that episode with an extra train seed from 2000 upwards. Validation is always seeds 190–199; test is always 1000–1029.
 
 ## Installed versions (local)
@@ -38,8 +41,6 @@ python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, py
 
 ## Open issues
 - **Mac only:** on import, macOS prints `objc ... Class SDL... is implemented in both cv2/.dylibs/libSDL2 and pygame/.dylibs/libSDL2` to stderr, because both OpenCV wheels bundle SDL2 on macOS. It's harmless with `SDL_VIDEODRIVER=dummy` and all tests pass. It doesn't occur on Kaggle/Colab (Linux).
-- Phase 2 acceptance: Aditya to confirm the pusher pushes the T in ≥ 2 of the 3 smoke filmstrips (`outputs/collect_data/filmstrip_*.png`).
-- Kaggle `collect_data` smoke and full not run yet.
 
 ## Last REPORT (local smoke)
 ```
