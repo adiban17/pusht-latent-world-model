@@ -40,6 +40,26 @@ def rollout_filmstrip(real: np.ndarray, decoded: np.ndarray, scale: int = 2,
     return np.concatenate([top, sep, bottom], axis=0)
 
 
+def multirow_filmstrip(rows: dict[str, np.ndarray], scale: int = 2, gap: int = 2,
+                       label_width: int = 76) -> np.ndarray:
+    """Labelled rows of frames (e.g. real | wm | wm_1step | pixel), each [T, H, W, 3] uint8 with
+    the same T; the label is drawn in a white margin left of each row."""
+    import cv2
+
+    strips = []
+    for label, frames in rows.items():
+        strip = filmstrip(frames, n=len(frames), scale=scale, gap=gap)
+        margin = np.full((strip.shape[0], label_width, 3), 255, np.uint8)
+        cv2.putText(margin, label, (4, strip.shape[0] // 2 + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                    (40, 40, 40), 1, cv2.LINE_AA)
+        strips.append(np.concatenate([margin, strip], axis=1))
+    sep = np.full((gap * 2, strips[0].shape[1], 3), 255, np.uint8)
+    out = [strips[0]]
+    for s in strips[1:]:
+        out += [sep, s]
+    return np.concatenate(out, axis=0)
+
+
 def save_histograms(arrays: dict[str, np.ndarray], path: str | Path) -> Path:
     """Histograms of block centre x/y, block angle, action x/y and per-step block movement."""
     import matplotlib

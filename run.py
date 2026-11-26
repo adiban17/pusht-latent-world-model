@@ -15,21 +15,28 @@ from typing import Any
 from wm.jobs import JobContext
 from wm.platform import detect_platform, device_name, get_device, out_dir
 from wm.report import Report
-from wm.registry import expand_group, job_config_hash, load_job_config, load_registry  # noqa: F401
+from wm.registry import (expand_group, input_hashes, job_config_hash, load_job_config,  # noqa: F401
+                         load_registry)
 from wm.repro import git_info
 from wm.store import WANDB_PROJECT, make_store
 
 LOCAL_FULL_ALLOWED = {"make_report"}
 
 
-def is_finished(store, entry: dict[str, Any], chash: str) -> bool:
-    """True if every artifact the job makes exists, is complete and has the same config_hash."""
+def is_finished(store, entry: dict[str, Any], chash: str,
+                registry: dict[str, Any] | None = None) -> bool:
+    """True if every artifact the job makes exists, is complete and has the same config_hash,
+    and (for a job that needs `ckpt-*` checkpoints) was made from checkpoints whose producers'
+    config_hashes are still the current ones (metadata `inputs`)."""
     makes = entry.get("makes") or []
     if not makes:
         return False
+    inputs = input_hashes(entry, registry)
     for name in makes:
         meta = store.own_metadata(name)
         if not meta or not meta.get("complete") or meta.get("config_hash") != chash:
+            return False
+        if inputs and meta.get("inputs") != inputs:
             return False
     return True
 
@@ -59,7 +66,7 @@ def run_job_status(name: str, mode: str, force: bool, registry: dict[str, Any]) 
     cfg = load_job_config(entry)
     chash = job_config_hash(name, entry, cfg)
     store = make_store(platform, mode)
-    if not force and is_finished(store, entry, chash):
+    if not force and is_finished(store, entry, chash, registry):
         print(f"{name}: already finished, skipping (use --force to rerun)")
         return 0, "SKIP"
 

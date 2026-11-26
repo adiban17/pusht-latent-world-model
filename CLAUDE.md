@@ -180,7 +180,7 @@ Job group `train_baselines` = `train_wm_1step`, `train_pixel`, `train_bc`, `trai
 - Probe errors (block px, block °) on predicted frames (`wm` via decoder; `pixel` directly; `copy_last` = last real frame).
 - Pixel MSE.
 - 95% bootstrap CIs (1,000 resamples over windows).
-Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decoded | pixel). REPORT: table at k = 1, 5, 10 for every method + relative reduction (1 − wm ÷ pixel) at k = 5, 10. CHECK: wm NMSE < copy_last NMSE at every k.
+Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decoded | pixel). **Phase 5 (pre-registered in PROGRESS.md):** primary metrics are the probe's block CoG px / angle ° / pusher px (+ p̂ pusher px); headline NMSE is `wm_via_frames` = E_wm(D_wm(ẑ)); predicted frames are clipped to [−0.5, 0.5]; filmstrips are real | wm | wm_1step | pixel; settings in `configs/rollouts.yaml`. REPORT: table at k = 1, 5, 10 for every method + relative reduction (1 − wm ÷ pixel) at k = 5, 10. CHECK: wm NMSE < copy_last NMSE at every k.
 
 **Planning (`planning.py`):** methods `cem_wm`, `cem_wm_1step`, `bc`, `random`, `noop`. Per method: success rate, Wilson 95% CI, median final pos/angle error, mean steps-to-success, seconds per episode.
 - Job `plan_val`: all methods, 50 val pairs, 1 seed (smoke: 3 pairs, budget 10).
@@ -199,7 +199,7 @@ Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decode
 - Smoke mode writes `<name>-smoke`. Smoke mode reads `<name>` if it exists, else `<name>-smoke`. Full mode reads and writes `<name>` only. Locally everything is smoke.
 - Metadata always includes `complete`, `step` (if training), `config_hash`, `git`.
 
-**Resume/skip:** a job whose output already exists with the same `config_hash` and `complete: true` prints "already finished, skipping" (unless `--force`). A training job whose latest checkpoint is incomplete resumes from it.
+**Resume/skip:** a job whose output already exists with the same `config_hash` and `complete: true` prints "already finished, skipping" (unless `--force`). An eval job (one whose `needs` include `ckpt-*`) also records `inputs` (each needed checkpoint's producer config_hash) and only skips if they are still current. A training job whose latest checkpoint is incomplete resumes from it.
 
 **Groups:** a group (`jobs.yaml` `groups`; a member may itself be a group) runs its jobs in order. A job that FAILs is recorded and the remaining jobs still run; at the end one `GROUP <name>: OK|FAILED (...) | PASS ... | SKIP ... | FAIL ...` line is printed, and the exit code is non-zero if any job failed.
 

@@ -59,10 +59,10 @@ jobs:
     config: configs/probe.yaml
     needs: [pusht-data]
     makes: [ckpt-probe]
-  eval_rollouts:
+  eval_rollouts:        # results metadata records the ckpt hashes used (`inputs`): stale if one changes
     phase: 5
     module: wm.jobs.eval_rollouts
-    config: null
+    config: configs/rollouts.yaml
     needs: [pusht-data, ckpt-wm, ckpt-wm-1step, ckpt-pixel, ckpt-probe]
     makes: [results-rollouts]
   plan_val:

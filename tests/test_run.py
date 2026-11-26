@@ -61,8 +61,8 @@ def test_unknown_job(capsys):
 
 
 def test_unbuilt_job(capsys):
-    assert run.main(["--job", "eval_rollouts"]) == 2
-    assert "not built yet (Phase 5)" in capsys.readouterr().out
+    assert run.main(["--job", "plan_val"]) == 2
+    assert "not built yet (Phase 6)" in capsys.readouterr().out
 
 
 def test_collect_data_smoke_then_skip(capsys, isolated_dirs):

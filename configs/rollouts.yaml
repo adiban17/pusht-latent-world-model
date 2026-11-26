@@ -1,0 +1,11 @@
+# Rollout evaluation (CLAUDE.md §9 Rollouts, Phase 5). Decisions pre-registered in PROGRESS.md.
+seed: 0              # window subset, bootstrap resamples
+windows: 500         # 13-frame test windows (o[t-2..t+10], a[t-2..t+9]) from pusht_test.npz
+bootstrap: 1000      # resamples over windows (same indices for every method -> paired CIs)
+ci: 0.95
+report_ks: [1, 5, 10]
+filmstrips: 6        # real | wm | wm_1step | pixel, frames t..t+10
+chunk: 64            # windows per forward pass
+probe_angle_floor_deg: 30.0   # WARN-only: the judge must read angle from real frames
+smoke:
+  windows: 20

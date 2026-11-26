@@ -36,6 +36,16 @@ def expand_group(name: str, groups: dict[str, Any]) -> list[str]:
     return out
 
 
+def input_hashes(entry: dict[str, Any], registry: dict[str, Any] | None = None) -> dict[str, str]:
+    """{artifact: producer's current config_hash} for every `ckpt-*` the job needs.
+
+    An eval job stores this in its results metadata (`inputs`); run.is_finished treats the
+    results as stale if a needed checkpoint's producer config changed since (Phase 5).
+    """
+    reg = registry or load_registry()
+    return {a: producer(a, reg)[1] for a in (entry.get("needs") or []) if a.startswith("ckpt-")}
+
+
 def producer(artifact: str, registry: dict[str, Any] | None = None) -> tuple[str, str]:
     """(job name, current config_hash) of the job in jobs.yaml that makes `artifact`."""
     reg = registry or load_registry()
