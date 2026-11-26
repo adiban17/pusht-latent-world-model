@@ -1,0 +1,25 @@
+# Data collection (CLAUDE.md §2-3). Expert numbers are the only things tuned in Phase 2.
+steps_per_episode: 100          # actions per episode; each episode stores steps + 1 frames
+train_seeds: [0, 199]           # inclusive range -> pusht_train.npz (200 episodes)
+val_seeds: [190, 199]           # inclusive; a subset of the train seeds
+test_seeds: [1000, 1029]        # inclusive -> pusht_test.npz (30 episodes)
+replacement_seed_start: 2000    # only used if gym-pusht refuses to step after termination
+smoke:
+  train_seeds: [0, 1]
+  test_seeds: [1000, 1000]
+media_episodes: 3               # GIFs + filmstrips of random episodes
+media_seed: 0
+
+expert:
+  subgoal_low: 100.0            # sub-goal for the block's centre, uniform in [low, high]^2
+  subgoal_high: 412.0
+  subgoal_every: 25             # steps per segment (new sub-goal and lateral offset)
+  noise_sigmas: [5.0, 15.0, 30.0]   # px, one per episode
+  random_eps: [0.05, 0.15]      # prob. of a random jump, one per episode
+  lateral_max: 25.0             # lateral offset u ~ U[-max, max] per segment
+  contact_offset: 55.0          # contact point c = b - offset * d + u * n
+  detour_dist: 90.0             # detour point b +/- dist * n
+  reach_px: 15.0                # "reached" radius for contact and detour points
+  approach_step: 25.0           # max step towards c / detour point
+  push_step: 20.0               # push target = p + push_step * d
+  random_jump: 60.0             # random target = p + U(-jump, jump)^2

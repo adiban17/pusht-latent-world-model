@@ -7,6 +7,10 @@ read from the unwrapped gym-pusht env (verified against the installed gym-pusht)
     env.unwrapped.block.position   -> pymunk Vec2d (x, y) of the T block's body
     env.unwrapped.block.angle      -> float, radians (unbounded; we wrap to [-pi, pi))
 gym-pusht's own `reset(options={"reset_to_state": s})` takes the same 5-vector.
+
+`block.position` is the T's body origin (the middle of the top edge of the bar), not its centre.
+For pose errors, success and data statistics we use the T's centre of gravity instead
+(pre-registered decision, Phase 2): cog = (block_x, block_y) + R(angle) @ BLOCK_COG_LOCAL.
 """
 from __future__ import annotations
 
@@ -23,6 +27,9 @@ ENV_ID = "gym_pusht/PushT-v0"
 IMG_SIZE = 64
 SUCCESS_POS_PX = 20.0   # fixed; never tune
 SUCCESS_ANG_DEG = 20.0  # fixed; never tune
+# T centre of gravity in body coordinates: mean of the bar (0, 15) and stem (0, 75) centroids,
+# as gym-pusht's add_tee sets it (checked against block.center_of_gravity in tests).
+BLOCK_COG_LOCAL = np.array([0.0, 45.0])
 
 
 def make_env() -> gym.Env:
@@ -78,9 +85,18 @@ def reset_to_state(env: gym.Env, state: np.ndarray) -> dict:
     return obs
 
 
+def block_cog(state: np.ndarray) -> np.ndarray:
+    """World (x, y) of the T's centre of gravity from state(s) [..., 5] -> [..., 2] (float64)."""
+    s = np.asarray(state, dtype=np.float64)
+    th = s[..., 4]
+    c, sn = np.cos(th), np.sin(th)
+    ox, oy = BLOCK_COG_LOCAL
+    return np.stack([s[..., 2] + c * ox - sn * oy, s[..., 3] + sn * ox + c * oy], axis=-1)
+
+
 def pose_error(state: np.ndarray, goal_state: np.ndarray) -> tuple[float, float]:
-    """(block position distance in px, block angle difference in degrees wrapped to [-180, 180))."""
-    pos_px = float(np.linalg.norm(np.asarray(state[2:4], float) - np.asarray(goal_state[2:4], float)))
+    """(distance between block centres of gravity in px, angle difference in deg in [-180, 180))."""
+    pos_px = float(np.linalg.norm(block_cog(state) - block_cog(goal_state)))
     ang_deg = wrap_angle_deg(np.degrees(float(state[4]) - float(goal_state[4])))
     return pos_px, ang_deg
 

@@ -40,11 +40,33 @@ def test_reset_roundtrip(env, state):
 
 def test_pose_error_wraps():
     a = np.array([0, 0, 100, 100, np.radians(179)], np.float32)
-    b = np.array([0, 0, 103, 104, np.radians(-179)], np.float32)
-    pos, ang = E.pose_error(a, b)
-    assert pos == pytest.approx(5.0, abs=1e-4)
+    b = np.array([0, 0, 100, 100, np.radians(-179)], np.float32)
+    _, ang = E.pose_error(a, b)
     assert ang == pytest.approx(-2.0, abs=1e-3)
     assert E.wrap_angle_deg(190) == pytest.approx(-170)
+    pos, _ = E.pose_error(np.array([0, 0, 100, 100, 0.3]), np.array([0, 0, 103, 104, 0.3]))
+    assert pos == pytest.approx(5.0, abs=1e-4)  # same angle: plain translation
+
+
+def test_block_cog_matches_pymunk(env):
+    for seed in range(5):
+        env.reset(seed=seed)
+        u = env.unwrapped
+        np.testing.assert_allclose(np.array(u.block.center_of_gravity), E.BLOCK_COG_LOCAL)
+        want = np.array(u.block.local_to_world(u.block.center_of_gravity))
+        np.testing.assert_allclose(E.block_cog(E.get_state(env)), want, atol=1e-3)
+
+
+def test_rotation_in_place_has_no_position_error(env):
+    """Rotating the T about its centre (as pymunk does) gives ~0 px position error."""
+    reset_state = np.array([100.0, 100.0, 300.0, 300.0, 0.0], np.float32)
+    E.reset_to_state(env, reset_state)
+    u = env.unwrapped
+    for deg in (30, 90, 179):
+        u.block.angle = np.radians(deg)  # pymunk keeps the centre of gravity fixed
+        pos, ang = E.pose_error(E.get_state(env), reset_state)
+        assert pos < 1e-3
+        assert abs(ang) == pytest.approx(deg, abs=1e-3)
 
 
 def test_is_success_thresholds():

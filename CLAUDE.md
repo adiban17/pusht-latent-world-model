@@ -74,14 +74,15 @@ pusht-latent-world-model/
 - Action: absolute target (x, y) in [0, 512]². Control rate: package default (10 Hz).
 - `get_state(env) -> np.float32[5]`: pusher x, y, block x, y, block angle, read from `env.unwrapped`. **Verify the attribute names in the installed version** and document them in a comment.
 - `reset_to_state(env, state)`: try `env.reset(options={"reset_to_state": state})`; if unsupported, set it through the unwrapped env (e.g. a `_set_state` method). Test: reset → get_state round-trip error < 1 px and < 0.5°.
-- `pose_error(state, goal_state) -> (pos_px, ang_deg)`: block position distance; angle difference wrapped to [−180°, 180°].
+- `pose_error(state, goal_state) -> (pos_px, ang_deg)`: distance between the block's **centres of gravity**; angle difference wrapped to [−180°, 180°].
+- **Decision (Phase 2, pre-registered before any results):** the block position used by `pose_error`, `is_success`, the expert and the data statistics is the T's **centre of gravity**, `block_cog(state) = (block_x, block_y) + R(angle)·(0, 45)`. The stored state's (x, y) is gym-pusht's body origin (the middle of the top edge of the bar, ~45 px from the centre), and it stays exactly as defined in Phase 1. With the CoG, rotating the T in place gives ~0 px position error.
 - `is_success(state, goal_state)`: `pos_px < 20 and abs(ang_deg) < 20`. Fixed; never tune these thresholds.
 - Normalisation: image `x/255 − 0.5` (CHW float); action/position `x/256 − 1`; angle → (sin, cos).
 
 ## 2. Scripted expert (`wm/data/expert.py`)
 Per episode: random sub-goal point for the block (uniform in [100, 412]², redrawn every 25 steps); noise σ ∈ {5, 15, 30} px and ε ∈ {0.05, 0.15}, sampled per episode; lateral offset u ∈ [−25, 25] px, sampled per segment.
 
-Each step, with block position b, pusher position p:
+Each step, with block position b (the T's centre of gravity, §1), pusher position p:
 1. d = unit(subgoal − b); n = d rotated 90°.
 2. Contact point c = b − 55·d + u·n.
 3. If p is on the far side of the block (dot(p − b, d) > 0), first target a detour point b + 90·(±n), choosing the side nearer p; once reached, continue to c.
@@ -96,7 +97,7 @@ Tuning is time-boxed to 90 minutes (Phase 2). Only adjust the numeric parameters
 - **Decision (Phase 1):** each episode stores **101 frames** (100 actions + the final frame), so train = exactly 20,000 transitions (20,200 frames) and test = exactly 3,000 transitions (3,030 frames).
 - Smoke: 2 train episodes + 1 test episode.
 - **Decision (Phase 1): never end an episode early.** Keep stepping for all 100 actions even if the env reports `terminated`. If gym-pusht refuses to step after termination, replace that episode with an extra train seed from 2000 upwards. Validation is always seeds 190–199; test is always seeds 1000–1029.
-- Arrays: `frames` uint8 [F,64,64,3]; `states` float32 [F,5]; `actions` float32 [F,2] (action applied at that frame; zeros on each episode's last frame); `clean_actions` float32 [F,2]; `episode_starts`, `episode_lengths` int64 [E]. `np.savez_compressed`.
+- Arrays: `frames` uint8 [F,64,64,3]; `states` float32 [F,5]; `actions` float32 [F,2] (action applied at that frame; zeros on each episode's last frame); `clean_actions` float32 [F,2]; `episode_starts`, `episode_lengths`, `episode_seeds` int64 [E] (**decision (Phase 2):** `episode_seeds` added so val episodes are found by seed). `np.savez_compressed`.
 - Health outputs: `data_health.json` with contact ratio (share of steps where the block moves > 0.5 px or turns > 0.5°), coverage (share of an 8×8 grid over the table the block visited; angle std), action stats; histograms PNG; 3 GIFs and 3 filmstrip PNGs (8 evenly spaced frames side by side) of random episodes.
 - REPORT CHECKS: exact transition counts; contact ratio ≥ 35% PASS, 25–35% WARN, < 25% FAIL.
 

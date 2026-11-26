@@ -35,8 +35,30 @@ def test_unknown_job(capsys):
 
 
 def test_unbuilt_job(capsys):
-    assert run.main(["--job", "collect_data"]) == 2
-    assert "not built yet (Phase 2)" in capsys.readouterr().out
+    assert run.main(["--job", "train_wm"]) == 2
+    assert "not built yet (Phase 3)" in capsys.readouterr().out
+
+
+def test_collect_data_smoke_then_skip(capsys, isolated_dirs):
+    import json
+
+    import numpy as np
+
+    code = run.main(["--job", "collect_data"])
+    out = capsys.readouterr().out
+    assert "[FAIL]" not in out and code == 0
+    assert "train_transitions: 200" in out and "test_transitions: 100" in out
+    job_dir = isolated_dirs / "outputs" / "collect_data"
+    with np.load(job_dir / "pusht_train.npz") as d:
+        assert d["frames"].shape == (202, 64, 64, 3)
+        assert d["episode_seeds"].tolist() == [0, 1]
+    assert len(list(job_dir.glob("filmstrip_*.png"))) == 3
+    assert len(list(job_dir.glob("episode_*.gif"))) == 3
+    meta = json.loads((isolated_dirs / "store" / "pusht-data-smoke" / "meta.json").read_text())
+    assert meta["complete"] is True
+
+    assert run.main(["--job", "collect_data"]) == 0
+    assert "already finished, skipping" in capsys.readouterr().out
 
 
 def test_env_check_runs_then_skips_then_force(capsys, isolated_dirs):
