@@ -90,8 +90,9 @@ jobs:
     needs: []
     makes: []
 
-# A group runs its jobs in order and stops at the first failure; each job is skipped if
-# already complete (diagnose_wm makes nothing, so it always reruns; it only evaluates).
+# A group runs its jobs in order; a failed job is recorded and the rest still run, then a
+# summary line lists PASS/SKIP/FAIL per job and the exit code is non-zero if any failed. Each job
+# is skipped if already complete (diagnose_wm makes nothing, so it always reruns; eval only).
 groups:
   train_baselines:
     phase: 4

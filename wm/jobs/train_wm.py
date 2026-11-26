@@ -14,7 +14,7 @@ import torch
 
 from wm.data.windows import WindowData
 from wm.jobs import JobContext
-from wm.jobs._trainer import TrainingJob, check_param_counts, load_npz, same_outputs
+from wm.jobs._trainer import TrainingJob, check_param_counts, check_roundtrip, load_npz, roundtrip
 from wm.models.world_model import build_world_model, expected_params, param_counts
 from wm.report import Report
 from wm.train.train_wm import decoded_rollout, loss_keys, prepare_model, run_training
@@ -66,8 +66,7 @@ def run(ctx: JobContext, report: Report, artifact: str = ARTIFACT,
     model_path = job.save_model(model, step)
     reloaded = build_world_model(cfg).to(device)
     reloaded.load_state_dict(torch.load(model_path, map_location=device, weights_only=True)["model"])
-    model.eval(); reloaded.eval()
-    same = same_outputs(model.encode, reloaded.encode, data.gather(data.val_starts[:2])[0])
+    rt = roundtrip(model, reloaded, model.encode, reloaded.encode, data.gather(data.val_starts[:2])[0])
 
     real, decoded = decoded_rollout(model, data, data.fixed_val_starts(1, tcfg["val_seed"])[0], device)
     strip_path = job.art_dir / "rollout_filmstrip.png"
@@ -78,8 +77,7 @@ def run(ctx: JobContext, report: Report, artifact: str = ARTIFACT,
     # ---- checks ----
     job.loss_checks(report, summary, log, keys)
     report.check_true("z_std", val["z_std"] > 0.1, f"{val['z_std']:.3f}", "> 0.1, collapse alarm")
-    report.check_true("checkpoint_roundtrip", same, "identical latents" if same else "mismatch",
-                      "model.pt reload == trained model")
+    check_roundtrip(report, rt, "latents")
     beat = val["nmse"][-1] < val["nmse_copy_last"][-1]
     strict = copy_last_must_win and ctx.mode == "full"
     report.check("nmse_k10_vs_copy_last", "PASS" if beat else ("FAIL" if strict else "WARN"),

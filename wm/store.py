@@ -134,6 +134,17 @@ class Store:
                 return cand
         return None
 
+    def candidates(self, name: str) -> list[tuple[str, dict[str, Any] | None]]:
+        """(name, metadata or None) for every name a read in this mode would try, in order."""
+        return [(cand, self.backend.metadata(cand)) for cand in read_candidates(name, self.mode)]
+
+    def resolve_matching(self, name: str, config_hash: str) -> str | None:
+        """The first read candidate that is complete and has this config_hash, or None."""
+        for cand, meta in self.candidates(name):
+            if meta and meta.get("complete") and meta.get("config_hash") == config_hash:
+                return cand
+        return None
+
     def pull(self, name: str) -> Path | None:
         resolved = self.resolve(name)
         return self.backend.pull(resolved) if resolved else None

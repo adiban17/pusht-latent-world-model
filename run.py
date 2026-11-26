@@ -15,28 +15,11 @@ from typing import Any
 from wm.jobs import JobContext
 from wm.platform import detect_platform, device_name, get_device, out_dir
 from wm.report import Report
-from wm.repro import REPO_ROOT, config_hash, git_info, load_yaml
+from wm.registry import expand_group, job_config_hash, load_job_config, load_registry  # noqa: F401
+from wm.repro import git_info
 from wm.store import WANDB_PROJECT, make_store
 
 LOCAL_FULL_ALLOWED = {"make_report"}
-
-
-def load_registry(path: Path = REPO_ROOT / "jobs.yaml") -> dict[str, Any]:
-    return load_yaml(path)
-
-
-def load_job_config(entry: dict[str, Any]) -> dict[str, Any]:
-    """The job's YAML config, or {} if it has none."""
-    cfg = entry.get("config")
-    if not cfg:
-        return {}
-    path = REPO_ROOT / cfg
-    return load_yaml(path) if path.exists() else {}
-
-
-def job_config_hash(name: str, entry: dict[str, Any], cfg: dict[str, Any]) -> str:
-    """config_hash = hash of the job name, its jobs.yaml entry and its config file."""
-    return config_hash({"job": name, "entry": entry, "config": cfg})
 
 
 def is_finished(store, entry: dict[str, Any], chash: str) -> bool:
@@ -51,29 +34,26 @@ def is_finished(store, entry: dict[str, Any], chash: str) -> bool:
     return True
 
 
-def expand_group(name: str, groups: dict[str, Any]) -> list[str]:
-    """The jobs of a group in order; a member that is itself a group is expanded in place."""
-    out: list[str] = []
-    for member in groups[name]["jobs"]:
-        out += expand_group(member, groups) if member in groups else [member]
-    return out
-
-
 def run_job(name: str, mode: str, force: bool, registry: dict[str, Any]) -> int:
     """Run one job; returns its exit code."""
+    return run_job_status(name, mode, force, registry)[0]
+
+
+def run_job_status(name: str, mode: str, force: bool, registry: dict[str, Any]) -> tuple[int, str]:
+    """Run one job; returns (exit code, status), status in PASS / SKIP / FAIL / REFUSED."""
     entry = registry["jobs"][name]
     platform = detect_platform()
     if mode == "full" and platform == "local" and name not in LOCAL_FULL_ALLOWED:
         print(f"REFUSED: '{name}' --mode full does not run on the local Mac (CPU, smoke only). "
               "Run it on Kaggle/Colab with the runner notebook.")
-        return 2
+        return 2, "REFUSED"
 
     try:
         module = importlib.import_module(entry["module"])
     except ModuleNotFoundError as e:
         if e.name == entry["module"]:
             print(f"job '{name}' is not built yet (Phase {entry['phase']})")
-            return 2
+            return 2, "FAIL"
         raise
 
     cfg = load_job_config(entry)
@@ -81,7 +61,7 @@ def run_job(name: str, mode: str, force: bool, registry: dict[str, Any]) -> int:
     store = make_store(platform, mode)
     if not force and is_finished(store, entry, chash):
         print(f"{name}: already finished, skipping (use --force to rerun)")
-        return 0
+        return 0, "SKIP"
 
     wandb_run = None
     if platform != "local":
@@ -107,7 +87,27 @@ def run_job(name: str, mode: str, force: bool, registry: dict[str, Any]) -> int:
     code = report.finish(ctx.out_dir)
     if wandb_run is not None:
         wandb_run.finish(exit_code=code)
-    return code
+    return code, "PASS" if code == 0 else "FAIL"
+
+
+def run_group(group: str, mode: str, force: bool, registry: dict[str, Any]) -> int:
+    """Run every job of a group in order, continuing after a failure; prints a summary line and
+    returns 0 only if no job failed (skipped = already finished counts as fine)."""
+    results: list[tuple[str, str]] = []
+    for member in expand_group(group, registry.get("groups", {})):
+        try:
+            status = run_job_status(member, mode, force, registry)[1]
+        except Exception:  # e.g. W&B or store errors outside the job itself: record, go on
+            traceback.print_exc()
+            status = "FAIL"
+        results.append((member, status))
+        print(f"[group {group}] {member}: {status}", flush=True)
+    by = {s: [m for m, st in results if st == s] for s in ("PASS", "SKIP", "FAIL", "REFUSED")}
+    bad = by["FAIL"] + by["REFUSED"]
+    parts = [f"{s} {', '.join(ms)}" for s, ms in by.items() if ms]
+    print(f"GROUP {group}: {'FAILED' if bad else 'OK'} ({len(results) - len(bad)} of {len(results)} "
+          f"passed or skipped) | " + " | ".join(parts), flush=True)
+    return 1 if bad else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -120,11 +120,7 @@ def main(argv: list[str] | None = None) -> int:
     registry = load_registry()
     groups = registry.get("groups", {})
     if args.job in groups:
-        for member in expand_group(args.job, groups):
-            code = run_job(member, args.mode, args.force, registry)
-            if code != 0:
-                return code
-        return 0
+        return run_group(args.job, args.mode, args.force, registry)
     if args.job not in registry["jobs"]:
         known = sorted([*registry["jobs"], *groups])
         print(f"unknown job '{args.job}'. Known jobs: {', '.join(known)}")

@@ -27,6 +27,29 @@ def test_registry_well_formed():
         "train_wm", "diagnose_wm", "train_wm_1step", "train_pixel", "train_bc", "train_probe"]
 
 
+def test_group_continues_after_a_failure_and_summarises(capsys, monkeypatch):
+    """A failing (or crashing) member is recorded, the rest still run, and the exit code is 1."""
+    calls = []
+
+    def fake(name, mode, force, registry):
+        calls.append(name)
+        if name == "train_pixel":
+            return 1, "FAIL"
+        if name == "train_bc":
+            raise RuntimeError("store down")
+        return (0, "SKIP") if name == "train_wm" else (0, "PASS")
+
+    monkeypatch.setattr(run, "run_job_status", fake)
+    assert run.main(["--job", "overnight"]) == 1
+    assert calls == ["train_wm", "diagnose_wm", "train_wm_1step", "train_pixel", "train_bc", "train_probe"]
+    out = capsys.readouterr().out
+    assert ("GROUP overnight: FAILED (4 of 6 passed or skipped) | PASS diagnose_wm, train_wm_1step, "
+            "train_probe | SKIP train_wm | FAIL train_pixel, train_bc") in out
+    monkeypatch.setattr(run, "run_job_status", lambda *a: (0, "PASS"))
+    assert run.main(["--job", "train_baselines"]) == 0
+    assert "GROUP train_baselines: OK (4 of 4 passed or skipped)" in capsys.readouterr().out
+
+
 def test_full_refused_locally(capsys):
     assert run.main(["--job", "env_check", "--mode", "full"]) == 2
     assert "REFUSED" in capsys.readouterr().out
@@ -144,9 +167,16 @@ def test_diagnose_wm_smoke(capsys, isolated_dirs):
     import json
 
     assert run.main(["--job", "diagnose_wm"]) != 0           # no ckpt-wm yet -> FAIL, clear message
-    assert "run train_wm first" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "run train_wm first" in out and "no complete 'ckpt-wm' with config_hash" in out
     assert run.main(["--job", "collect_data"]) == 0
     assert run.main(["--job", "train_wm"]) == 0
+    # an older full `ckpt-wm` (v1 hash) is read first in smoke mode; it must be passed over
+    import shutil
+    store = isolated_dirs / "store"
+    shutil.copytree(store / "ckpt-wm-smoke", store / "ckpt-wm")
+    meta = json.loads((store / "ckpt-wm" / "meta.json").read_text())
+    (store / "ckpt-wm" / "meta.json").write_text(json.dumps({**meta, "config_hash": "d2385fb211c8"}))
     capsys.readouterr()
     assert run.main(["--job", "diagnose_wm"]) == 0
     out = capsys.readouterr().out
@@ -159,6 +189,8 @@ def test_diagnose_wm_smoke(capsys, isolated_dirs):
     assert res["p_hat_pusher"]["val"]["k10"]["copy_last_mean"] > 0
     assert set(res["ridge_imagined"]["val"]) == {"k1", "k5", "k10"}
     assert res["ckpt"]["name"] == "ckpt-wm-smoke" and res["ckpt"]["step"] == 50
+    assert res["ckpt"]["config_hash"] == res["ckpt"]["expected_config_hash"] != "d2385fb211c8"
+    assert "[PASS] ckpt_config_hash" in out and "proprio = True" in out
     assert (job_dir / "recon_filmstrip_val.png").exists()
     assert run.main(["--job", "diagnose_wm"]) == 0           # makes nothing -> reruns, no skip
     assert "already finished" not in capsys.readouterr().out

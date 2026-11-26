@@ -10,7 +10,7 @@ import torch
 
 from wm.data.windows import FrameData
 from wm.jobs import JobContext
-from wm.jobs._trainer import TrainingJob, check_param_counts, load_npz, same_outputs
+from wm.jobs._trainer import TrainingJob, check_param_counts, check_roundtrip, load_npz, roundtrip
 from wm.models.probe import EXPECTED_PARAMS, build_probe, param_counts
 from wm.report import Report
 from wm.train.train_probe import ERROR_KEYS, LOSS_KEYS, evaluate, run_training
@@ -46,15 +46,13 @@ def run(ctx: JobContext, report: Report) -> None:
     model_path = job.save_model(model, step)
     reloaded = build_probe(cfg).to(device)
     reloaded.load_state_dict(torch.load(model_path, map_location=device, weights_only=True)["model"])
-    model.eval(); reloaded.eval()
-    same = same_outputs(model, reloaded, test.gather(test.val_idx[:2])[0])
+    rt = roundtrip(model, reloaded, model, reloaded, test.gather(test.val_idx[:2])[0])
     summary = job.write_summary(result, LOSS_KEYS, val=val, test=test_eval,
                                 block_position="centre of gravity (block_cog)")
 
     # ---- checks ----
     job.loss_checks(report, summary, log, LOSS_KEYS)
-    report.check_true("checkpoint_roundtrip", same, "identical outputs" if same else "mismatch",
-                      "model.pt reload == trained model")
+    check_roundtrip(report, rt, "outputs")
     beat = test_eval["block_px_mean"] < test_eval["baseline_block_px_mean"]
     report.check("test_block_px_vs_mean", "PASS" if beat else ("WARN" if ctx.mode == "smoke" else "FAIL"),
                  f"{test_eval['block_px_mean']:.1f} vs {test_eval['baseline_block_px_mean']:.1f}",

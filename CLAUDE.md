@@ -152,6 +152,8 @@ Same encoder design → Linear 256→6: pusher (x, y), block (x, y) normalised, 
 
 Job group `train_baselines` = `train_wm_1step`, `train_pixel`, `train_bc`, `train_probe`, in that order, each skipped if already complete.
 
+**Checkpoint round trip (every training job):** the reloaded `model.pt` weights must be bit-identical, and its outputs must match the trained model's within `torch.allclose(rtol=1e-4, atol=1e-5)`, both models in eval mode. The REPORT line shows the max absolute and relative difference and the tolerance. (Exact output equality failed on CUDA for the pixel U-Net, most likely because `ConvTranspose2d` can be nondeterministic there.)
+
 ## 8. CEM planner and MPC (`wm/planning/`)
 | Setting | Value |
 | --- | --- |
@@ -198,6 +200,10 @@ Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decode
 - Metadata always includes `complete`, `step` (if training), `config_hash`, `git`.
 
 **Resume/skip:** a job whose output already exists with the same `config_hash` and `complete: true` prints "already finished, skipping" (unless `--force`). A training job whose latest checkpoint is incomplete resumes from it.
+
+**Groups:** a group (`jobs.yaml` `groups`; a member may itself be a group) runs its jobs in order. A job that FAILs is recorded and the remaining jobs still run; at the end one `GROUP <name>: OK|FAILED (...) | PASS ... | SKIP ... | FAIL ...` line is printed, and the exit code is non-zero if any job failed.
+
+**Loading trained checkpoints (rule for every eval job: `diagnose_wm`, `eval_rollouts`, `plan_val`, `plan_sweep`, `final_eval`):** load `ckpt-wm`, `ckpt-wm-1step` (and any other `ckpt-*`) only through `wm/jobs/_ckpt.py::pull_matching`, which takes the first read candidate that is `complete: true` and whose `config_hash` equals what the producing job's *current* config gives; if none matches, FAIL with a message naming what was found. The REPORT prints the checkpoint's config_hash (and, for world models, the `proprio` flag). Without this, smoke mode's "read `<name>` first" rule would silently pick an older recipe.
 
 **Jobs (`jobs.yaml` → `wm/jobs/*`):**
 | Job | Phase | Needs | Makes |

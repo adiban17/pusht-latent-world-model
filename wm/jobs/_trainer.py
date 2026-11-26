@@ -155,8 +155,37 @@ def check_param_counts(report: Report, counts: dict[str, int], expected: dict[st
                       " / ".join(f"{k} {v:,}" for k, v in counts.items()), f"== {where}")
 
 
-def same_outputs(fn_a, fn_b, x) -> bool:
-    """True if two models give identical outputs on x (checkpoint round-trip check)."""
+# Checkpoint round trip (fix after the Kaggle overnight smoke, 2026-11-27): the reloaded weights
+# must be bit-identical, but outputs are compared with a tolerance, because some CUDA kernels are
+# nondeterministic (ConvTranspose2d's forward uses cuDNN's backward-data path, which can sum in a
+# different order on each call), so even one model run twice may differ in the last bits.
+ROUNDTRIP_RTOL, ROUNDTRIP_ATOL = 1e-4, 1e-5
+
+
+def roundtrip(model: torch.nn.Module, reloaded: torch.nn.Module, fn_a, fn_b, x) -> dict[str, Any]:
+    """Compare a trained model with its model.pt reload: exact weights, outputs within tolerance.
+
+    Both models are put in eval mode. Returns ok, weights_identical, max_abs_diff, max_rel_diff
+    (max |a - b| / max |a|) and prints the differences.
+    """
+    model.eval(); reloaded.eval()
+    sa, sb = model.state_dict(), reloaded.state_dict()
+    weights = sa.keys() == sb.keys() and all(torch.equal(sa[k], sb[k]) for k in sa)
     with torch.no_grad():
-        a, b = fn_a(x), fn_b(x)
-    return torch.equal(a, b)
+        a, b = fn_a(x).float(), fn_b(x).float()
+    diff = float((a - b).abs().max())
+    rel = diff / max(float(a.abs().max()), 1e-12)
+    close = torch.allclose(b, a, rtol=ROUNDTRIP_RTOL, atol=ROUNDTRIP_ATOL)
+    print(f"checkpoint round trip: weights identical {weights}, max |diff| {diff:.3e} "
+          f"(relative {rel:.3e})", flush=True)
+    return {"ok": bool(weights and close), "weights_identical": bool(weights),
+            "max_abs_diff": diff, "max_rel_diff": rel}
+
+
+def check_roundtrip(report: Report, rt: dict[str, Any], what: str) -> None:
+    """CHECK checkpoint_roundtrip, with the measured differences and the tolerance."""
+    report.check_true("checkpoint_roundtrip", rt["ok"],
+                      f"{what}: weights {'identical' if rt['weights_identical'] else 'DIFFER'}, "
+                      f"max |diff| {rt['max_abs_diff']:.2e} (rel {rt['max_rel_diff']:.2e})",
+                      f"model.pt weights bit-identical; outputs allclose rtol {ROUNDTRIP_RTOL:g}, "
+                      f"atol {ROUNDTRIP_ATOL:g}")

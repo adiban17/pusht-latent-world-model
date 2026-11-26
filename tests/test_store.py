@@ -52,3 +52,28 @@ def test_wandb_store_needs_key(monkeypatch):
     monkeypatch.delenv("WANDB_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="WANDB_API_KEY"):
         make_store("kaggle", "smoke")
+
+
+def test_resolve_matching_skips_other_config_hashes(tmp_path):
+    """Smoke reads `<name>` first, but only a complete artifact with the right hash counts."""
+    from types import SimpleNamespace
+
+    from wm.jobs._ckpt import pull_matching
+    from wm.registry import producer
+
+    _, want = producer("ckpt-wm")
+    full = Store(LocalStore(tmp_path / "s"), "full")
+    smoke = Store(LocalStore(tmp_path / "s"), "smoke")
+    full.push("ckpt-wm", _file(tmp_path, "v1"), {"complete": True, "config_hash": "d2385fb211c8"})
+    ctx = SimpleNamespace(store=smoke)
+    with pytest.raises(RuntimeError, match="no complete 'ckpt-wm' with config_hash") as e:
+        pull_matching(ctx, "ckpt-wm")
+    assert "d2385fb211c8" in str(e.value) and "ckpt-wm-smoke: missing" in str(e.value)
+    smoke.push("ckpt-wm", _file(tmp_path, "ab-partial"), {"complete": False, "config_hash": want})
+    assert smoke.resolve_matching("ckpt-wm", want) is None            # incomplete does not count
+    smoke.push("ckpt-wm", _file(tmp_path, "ab"), {"complete": True, "config_hash": want})
+    path, name, meta, expected = pull_matching(ctx, "ckpt-wm")
+    assert name == "ckpt-wm-smoke" and expected == want and meta["config_hash"] == want
+    assert (path / "payload.txt").read_text() == "ab"
+    with pytest.raises(RuntimeError):                                  # full never reads -smoke
+        pull_matching(SimpleNamespace(store=full), "ckpt-wm")

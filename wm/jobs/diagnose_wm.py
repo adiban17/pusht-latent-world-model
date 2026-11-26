@@ -1,7 +1,8 @@
 """Job diagnose_wm (Phase 3, eval only): where does the world model's train/val gap come from?
 
-Pulls `ckpt-wm` (smoke mode falls back to `ckpt-wm-smoke`) and compares train episodes with val
-episodes (seeds 190-199):
+Pulls the complete `ckpt-wm` (or, in smoke mode, `ckpt-wm-smoke`) whose config_hash matches the
+current configs/wm.yaml (FAIL if none does), and compares train episodes with val episodes
+(seeds 190-199):
   1. each loss term (rec, lat, img, var) on 256 train and 256 val windows (+ open-loop NMSE_k);
   2. single-frame encode -> decode MSE, all pixels and non-background pixels only;
   3. a ridge probe z -> state fit on train frames, evaluated on val frames, and applied to the
@@ -29,6 +30,7 @@ from wm.eval.diagnose import (TERMS, encode_frames, imagined_probe, pusher_error
                               ridge_probe, subset, window_terms)
 from wm.eval.rollouts import latent_nmse
 from wm.jobs import JobContext
+from wm.jobs._ckpt import pull_matching
 from wm.jobs._trainer import load_npz
 from wm.models.world_model import load_world_model, param_counts
 from wm.report import Report
@@ -58,11 +60,9 @@ def all_finite(obj: Any) -> bool:
 def run(ctx: JobContext, report: Report) -> None:
     t0 = time.time()
     device = ctx.device
-    ckpt_name = ctx.store.resolve("ckpt-wm")
-    path = ctx.store.pull("ckpt-wm")
-    if path is None or not (path / "model.pt").exists():
-        raise RuntimeError("no finished 'ckpt-wm' (model.pt) in the store: run train_wm first")
-    ckpt_meta = ctx.store.metadata("ckpt-wm") or {}
+    path, ckpt_name, ckpt_meta, expected_hash = pull_matching(ctx, "ckpt-wm")
+    if not (path / "model.pt").exists():
+        raise RuntimeError(f"'{ckpt_name}' has no model.pt; run train_wm first")
     model, blob = load_world_model(path / "model.pt", device)
     cfg = blob["config"]
     counts = param_counts(model)
@@ -118,7 +118,7 @@ def run(ctx: JobContext, report: Report) -> None:
     results = {
         "job": "diagnose_wm", "mode": ctx.mode, "git": ctx.git, "config_hash": ctx.config_hash,
         "ckpt": {"name": ckpt_name, "meta": ckpt_meta, "git": blob.get("git"), "step": blob.get("step"),
-                 "config_hash": blob.get("config_hash")},
+                 "config_hash": blob.get("config_hash"), "expected_config_hash": expected_hash},
         "wm_config": cfg, "params": counts, "data": data_name, "val_source": data.val_source,
         "settings": {"windows": WINDOWS, "max_train_frames": MAX_FRAMES, "ridge_lambda": RIDGE_LAMBDA,
                      "fg_threshold": 0.1, "ks": list(KS)},
@@ -130,9 +130,9 @@ def run(ctx: JobContext, report: Report) -> None:
     json_path.write_text(json.dumps(results, indent=2))
 
     # ---- REPORT ----
-    complete = bool(ckpt_meta.get("complete"))
-    report.check("ckpt_complete", "PASS" if complete else "WARN",
-                 f"{ckpt_name} step {blob.get('step')}", "complete: true")
+    report.check_true("ckpt_config_hash", blob.get("config_hash") == expected_hash,
+                      f"{ckpt_name} step {blob.get('step')}: {blob.get('config_hash')}",
+                      f"== {expected_hash}, current configs/wm.yaml; complete: true")
     ok = all_finite({k: results[k] for k in ("loss_terms", "nmse", "recon", "ridge", "ridge_imagined",
                                              "p_hat_pusher") if results[k] is not None})
     report.check_true("metrics_finite", ok, "all finite" if ok else "NaN/inf", "no NaN/inf")
@@ -140,6 +140,7 @@ def run(ctx: JobContext, report: Report) -> None:
     report.metric("ckpt", f"{ckpt_name} (step {blob.get('step')}, git {blob.get('git')})")
     report.metric("data", data_name)
     report.metric("val_source", data.val_source)
+    report.metric("ckpt_config_hash", f"{blob.get('config_hash')} (expected {expected_hash})")
     report.metric("proprio", model.proprio)
     report.metric("windows", f"train {len(splits['train'])} / val {len(splits['val'])}")
     for split in ("train", "val"):

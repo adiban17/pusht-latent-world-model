@@ -7,7 +7,7 @@ import torch
 
 from wm.data.windows import GoalData
 from wm.jobs import JobContext
-from wm.jobs._trainer import TrainingJob, check_param_counts, load_npz, same_outputs
+from wm.jobs._trainer import TrainingJob, check_param_counts, check_roundtrip, load_npz, roundtrip
 from wm.models.bc import EXPECTED_PARAMS, build_bc, param_counts
 from wm.report import Report
 from wm.train.train_bc import LOSS_KEYS, run_training
@@ -42,15 +42,13 @@ def run(ctx: JobContext, report: Report) -> None:
     model_path = job.save_model(model, step)
     reloaded = build_bc(cfg).to(device)
     reloaded.load_state_dict(torch.load(model_path, map_location=device, weights_only=True)["model"])
-    model.eval(); reloaded.eval()
     b = data.gather(*[x[:2] for x in data.fixed_val(2, 0)])
-    same = same_outputs(lambda im: model(im, b["pusher"]), lambda im: reloaded(im, b["pusher"]), b["images"])
+    rt = roundtrip(model, reloaded, lambda im: model(im, b["pusher"]), lambda im: reloaded(im, b["pusher"]), b["images"])
     summary = job.write_summary(result, LOSS_KEYS, data_summary=data.summary(), val=val)
 
     # ---- checks ----
     job.loss_checks(report, summary, log, LOSS_KEYS)
-    report.check_true("checkpoint_roundtrip", same, "identical actions" if same else "mismatch",
-                      "model.pt reload == trained model")
+    check_roundtrip(report, rt, "actions")
     beat = val["loss"] < val["baseline_mse"]
     report.check("val_mse_vs_mean_action", "PASS" if beat else ("WARN" if ctx.mode == "smoke" else "FAIL"),
                  f"{val['loss']:.4f} vs {val['baseline_mse']:.4f}",

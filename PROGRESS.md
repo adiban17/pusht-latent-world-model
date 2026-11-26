@@ -1,6 +1,6 @@
 # PROGRESS
 
-**Current phase: 3b done → 4 on Kaggle.** `wm_ablate` full picked A+B, now the default recipe (`wm.yaml`, `wm_1step.yaml`). Next: Aditya pushes, runs Kaggle `overnight` smoke, then `overnight` full (= `train_wm` → `diagnose_wm` → `train_baselines`). `ckpt-wm:v5` is the v1 model.
+**Current phase: 3b done → 4 on Kaggle.** `wm_ablate` full picked A+B, now the default recipe (`wm.yaml`, `wm_1step.yaml`). The first Kaggle `overnight` smoke (commit 3c6f9a2) found three runner problems, now fixed (see the 2026-11-27 fix entries in Decisions). Next: Aditya pushes, reruns Kaggle `overnight` smoke, then `overnight` full (= `train_wm` → `diagnose_wm` → `train_baselines`). `ckpt-wm:v5` is the v1 model.
 
 ## Status
 | Phase | Status | Local smoke | Kaggle smoke | Kaggle full |
@@ -76,6 +76,10 @@
 - **config_hash changes (deliberate, 2026-11-27):** `train_wm` d2385fb211c8 → **d4c8e342b0d6** (guard test updated), `train_wm_1step` → dd5934291cbe. So the next `train_wm` full does not skip and does not resume from v5: it trains A+B from scratch (v5 is complete with the old hash). `wm_ablate`'s `base_config` now points at `wm_v1.yaml` (so its v1 row keeps its meaning); that changed its hash to 76b1611426f5, so a rerun would not skip — it is finished and should not be rerun. `scripts/compare_collapse_fixes.py` and `scripts/check_proprio_init.py` also read `wm_v1.yaml` now. The Phase 4 refactor guard (frozen v1 hash) is superseded.
 - **`overnight` group (2026-11-27):** `jobs.yaml` group = `train_wm` → `diagnose_wm` → `train_baselines`; a member that is a group is expanded in place (`run.expand_group`), so it runs train_wm, diagnose_wm, train_wm_1step, train_pixel, train_bc, train_probe and stops at the first failure. Finished training jobs skip; `diagnose_wm` makes nothing, so it always reruns (eval only, a few minutes).
 - **diagnose_wm with proprio (2026-11-27):** loss terms include `proprio`; for a proprio model it also reports the open-loop p̂ pusher error at k = 1, 5, 10 vs copy-last p_t, train and val (`p_hat_pusher` in `diagnose_wm.json`, `p_hat_pusher_{train,val}` in the REPORT).
+- **Kaggle `overnight` smoke #1 (commit 3c6f9a2, as reported by Aditya):** train_wm and train_wm_1step PASS; train_pixel `[FAIL] checkpoint_roundtrip: mismatch` on CUDA (it passed on CPU); the group then stopped, so train_bc and train_probe never ran; diagnose_wm diagnosed the old v1 `ckpt-wm` (step 30000, git 5dedc02, proprio False).
+- **Fix: checkpoint round trip tolerance (2026-11-27):** `wm/jobs/_trainer.py::roundtrip` puts both models in eval mode, requires bit-identical reloaded weights, and compares outputs with `torch.allclose(rtol=1e-4, atol=1e-5)`. It prints and reports the max absolute and relative difference, and the tolerance is on the REPORT line. Used by all four training jobs (train_wm/1step, pixel, BC, probe). Cause, from the code (not measured; there is no GPU locally): both models were already in eval mode, and only the pixel check runs a `ConvTranspose2d` (its up path). CUDA computes that through cuDNN's backward-data kernels, which can be nondeterministic, so two calls may differ in the last bits. The world-model check only compares `encode` (plain convs), BC and the probe have no transposed convs, and the exact match passes on CPU. **To confirm on Kaggle:** the next smoke's train_pixel line must show weights identical and a max |diff| at float-noise level. If the difference is larger, it's a real bug and the check will FAIL.
+- **Fix: groups continue on failure (2026-11-27):** `run.run_group` runs every member even after a FAIL (or an exception outside the job, e.g. W&B), prints `[group <g>] <job>: PASS|SKIP|FAIL|REFUSED` after each job and a final `GROUP <g>: OK|FAILED (n of m passed or skipped) | PASS ... | SKIP ... | FAIL ...` line, and exits 1 if anything failed. Registry helpers moved from run.py into `wm/registry.py` (run.py re-exports them).
+- **Fix: hash-matched checkpoints (2026-11-27):** `wm/jobs/_ckpt.py::pull_matching(ctx, artifact)` returns the first read candidate (smoke: `<name>`, then `<name>-smoke`) that is complete and has the config_hash the producing job's current config gives (`wm.registry.producer`). Otherwise it raises a FAIL naming each candidate's hash, `complete` and step. diagnose_wm uses it, adds CHECK `ckpt_config_hash` and prints `ckpt_config_hash` and `proprio`. This is the rule for every later eval job (CLAUDE.md §10). Note: the W&B store only looks at each name's `:latest` version.
 - **Note for Phase 6 (not built):** with proprio, the planner's goal cost uses only the image latent z_g (the goal is an image), not the goal pusher position.
 
 ## Installed versions (local)
@@ -83,7 +87,6 @@ python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, py
 
 ## Open issues
 - **`results/ablation_wm_fixes.json` is not in the repo yet** (not in `results/` or Downloads when this was committed). Aditya: download it from the Kaggle `wm_ablate` output (`/kaggle/working/pusht-latent-world-model/results/ablation_wm_fixes.json`, or the W&B artifact `results-wm-ablate`) and drop it in `results/`; Claude then commits it and writes the table into this file from it.
-- **Kaggle `overnight` smoke:** smoke mode reads `<name>` before `<name>-smoke`, so on Kaggle the smoke `diagnose_wm` diagnoses `ckpt-wm:v5` (the v1 model), not the smoke A+B one. Harmless for a smoke; the full run diagnoses the new A+B `ckpt-wm`. Locally (no `ckpt-wm`) the smoke exercises the proprio path.
 - Kaggle v1 val loss is almost all variance hinge (0.336 of 0.346): val latents are far less spread per dimension than train ones. `wm_ablate` reports z_std per row; revisit after it.
 - Getting `results/ablation_wm_fixes.json` into the repo: the Kaggle run writes it to `/kaggle/working/pusht-latent-world-model/results/` and to the W&B artifact `results-wm-ablate`; Aditya downloads that one file from the Kaggle output and drops it in `results/`.
 - The local smoke filmstrip's decoded row is still a blur (50 steps, batch 4, CPU); judge the decoder on the Kaggle full run.
@@ -92,19 +95,17 @@ python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, py
 - BC smoke `val_z_std` = 0.006 (50 CPU steps). No CHECK by design; watch it on the Kaggle full run.
 - **Mac only:** on import, macOS prints `objc ... Class SDL... is implemented in both cv2/.dylibs/libSDL2 and pygame/.dylibs/libSDL2` to stderr, because both OpenCV wheels bundle SDL2 on macOS. It's harmless with `SDL_VIDEODRIVER=dummy` and all tests pass. It doesn't occur on Kaggle/Colab (Linux).
 
-## Last REPORT (local smoke, overnight = train_wm → diagnose_wm → train_baselines, A+B recipe)
-train_pixel / train_bc / train_probe skipped: their configs are unchanged and their Phase 4 smoke
-artifacts are complete (REPORTs below).
+## Last REPORT (local smoke, `overnight --force`, after the 2026-11-27 runner fixes)
 ```
 ==================== RUN REPORT ====================
 job: train_wm   mode: smoke   platform: local   device: cpu
-git: ffd775a-dirty   time: 16.9s   params: 4,186,053
+git: 3c6f9a2-dirty   time: 18.9s   params: 4,186,053
 CHECKS
  [PASS] param_counts: encoder 1,738,976 / decoder 1,742,563 / dynamics 704,514 / total 4,186,053 / planner 2,443,490 (== CLAUDE.md §4 (+ proprio))
  [PASS] losses_finite: all finite (no NaN/inf)
  [PASS] loss_fell: 1.3358 -> 0.3314 (mean of last 10 < first 10 steps)
  [PASS] z_std: 0.817 (> 0.1, collapse alarm)
- [PASS] checkpoint_roundtrip: identical latents (model.pt reload == trained model)
+ [PASS] checkpoint_roundtrip: latents: weights identical, max |diff| 0.00e+00 (rel 0.00e+00) (model.pt weights bit-identical; outputs allclose rtol 0.0001, atol 1e-05)
  [PASS] nmse_k10_vs_copy_last: 0.413 vs 0.449 (model < copy-last; WARN only in smoke)
 METRICS
  data = pusht-data-smoke
@@ -117,8 +118,8 @@ METRICS
  rec_first_last = 0.1907 -> 0.0540
  lat_first_last = 0.1199 -> 0.1073
  img_first_last = 0.1914 -> 0.0527
- it_per_s = 4.17
- projected_30k_steps = 2h00m03s
+ it_per_s = 3.63
+ projected_30k_steps = 2h17m34s
  peak_gpu_mem = n/a (cpu)
  val_nmse_k1 = 0.010 (copy-last 0.009)
  val_nmse_k5 = 0.163 (copy-last 0.156)
@@ -137,14 +138,15 @@ W&B: off
 ====================================================
 ==================== RUN REPORT ====================
 job: diagnose_wm   mode: smoke   platform: local   device: cpu
-git: ffd775a-dirty   time: 9.6s   params: 4,186,053
+git: 3c6f9a2-dirty   time: 10.7s   params: 4,186,053
 CHECKS
- [PASS] ckpt_complete: ckpt-wm-smoke step 50 (complete: true)
+ [PASS] ckpt_config_hash: ckpt-wm-smoke step 50: d4c8e342b0d6 (== d4c8e342b0d6, current configs/wm.yaml; complete: true)
  [PASS] metrics_finite: all finite (no NaN/inf)
 METRICS
- ckpt = ckpt-wm-smoke (step 50, git ffd775a-dirty)
+ ckpt = ckpt-wm-smoke (step 50, git 3c6f9a2-dirty)
  data = pusht-data-smoke
  val_source = train episode seed 1 (smoke: no val episodes)
+ ckpt_config_hash = d4c8e342b0d6 (expected d4c8e342b0d6)
  proprio = True
  windows = train 178 / val 89
  loss_terms_train = loss 0.6119 rec 0.0544 lat 0.1479 img 0.0536 var 0.4781 proprio 0.0111
@@ -171,14 +173,14 @@ W&B: off
 ====================================================
 ==================== RUN REPORT ====================
 job: train_wm_1step   mode: smoke   platform: local   device: cpu
-git: ffd775a-dirty   time: 13.6s   params: 4,186,053
+git: 3c6f9a2-dirty   time: 15.4s   params: 4,186,053
 CHECKS
  [PASS] teacher_forcing: true (true for wm_1step)
  [PASS] param_counts: encoder 1,738,976 / decoder 1,742,563 / dynamics 704,514 / total 4,186,053 / planner 2,443,490 (== CLAUDE.md §4 (+ proprio))
  [PASS] losses_finite: all finite (no NaN/inf)
  [PASS] loss_fell: 1.2064 -> 0.3080 (mean of last 10 < first 10 steps)
  [PASS] z_std: 0.789 (> 0.1, collapse alarm)
- [PASS] checkpoint_roundtrip: identical latents (model.pt reload == trained model)
+ [PASS] checkpoint_roundtrip: latents: weights identical, max |diff| 0.00e+00 (rel 0.00e+00) (model.pt weights bit-identical; outputs allclose rtol 0.0001, atol 1e-05)
  [WARN] nmse_k10_vs_copy_last: 0.710 vs 0.480 (model < copy-last; WARN only for the 1-step baseline)
 METRICS
  data = pusht-data-smoke
@@ -191,8 +193,8 @@ METRICS
  rec_first_last = 0.1922 -> 0.0567
  lat_first_last = 0.0486 -> 0.0078
  img_first_last = 0.1928 -> 0.0566
- it_per_s = 4.22
- projected_30k_steps = 1h58m31s
+ it_per_s = 3.81
+ projected_30k_steps = 2h11m21s
  peak_gpu_mem = n/a (cpu)
  val_nmse_k1 = 0.013 (copy-last 0.011)
  val_nmse_k5 = 0.254 (copy-last 0.182)
@@ -209,9 +211,104 @@ SAVED
  store/ckpt-wm-1step-smoke
 W&B: off
 ====================================================
-train_pixel: already finished, skipping (use --force to rerun)
-train_bc: already finished, skipping (use --force to rerun)
-train_probe: already finished, skipping (use --force to rerun)
+==================== RUN REPORT ====================
+job: train_pixel   mode: smoke   platform: local   device: cpu
+git: 3c6f9a2-dirty   time: 3.6s   params: 4,813,731
+CHECKS
+ [PASS] param_counts: 4,813,731 (+15.0% vs world model 4,184,899) (== 4,813,731, within ±20%)
+ [PASS] losses_finite: all finite (no NaN/inf)
+ [PASS] loss_fell: 0.0160 -> 0.0020 (mean of last 10 < first 10 steps)
+ [PASS] checkpoint_roundtrip: predictions: weights identical, max |diff| 0.00e+00 (rel 0.00e+00) (model.pt weights bit-identical; outputs allclose rtol 0.0001, atol 1e-05)
+ [WARN] one_step_vs_copy_last: 0.00208 vs 0.00068 (val pixel MSE at k=1 < copy-last; WARN only in smoke)
+METRICS
+ data = pusht-data-smoke
+ steps = 50 (batch 4)
+ resumed_from_step = 0
+ train_windows = 196
+ val_source = train episode seed 1 (smoke: no val episodes)
+ val_windows = 16
+ loss_first_last = 0.01603 -> 0.00196
+ it_per_s = 28.89
+ projected_30k_steps = 17m19s
+ peak_gpu_mem = n/a (cpu)
+ val_pixel_mse_k1 = 0.00208 (copy-last 0.00068)
+ val_pixel_mse_k5 = 0.04477 (copy-last 0.00302)
+ val_pixel_mse_k10 = 0.36358 (copy-last 0.00474)
+ lr_final = 3.65e-07
+SAVED
+ outputs/train_pixel/artifact/model.pt
+ outputs/train_pixel/artifact/train_summary.json
+ outputs/train_pixel/artifact/config.yaml
+ outputs/train_pixel/artifact/rollout_filmstrip.png
+ store/ckpt-pixel-smoke
+W&B: off
+====================================================
+==================== RUN REPORT ====================
+job: train_bc   mode: smoke   platform: local   device: cpu
+git: 3c6f9a2-dirty   time: 8.5s   params: 2,528,482
+CHECKS
+ [PASS] param_counts: encoder 1,738,976 / mlp 789,506 / total 2,528,482 (== CLAUDE.md §6 (≈2.53M))
+ [PASS] losses_finite: all finite (no NaN/inf)
+ [PASS] loss_fell: 0.3661 -> 0.3100 (mean of last 10 < first 10 steps)
+ [PASS] checkpoint_roundtrip: actions: weights identical, max |diff| 0.00e+00 (rel 0.00e+00) (model.pt weights bit-identical; outputs allclose rtol 0.0001, atol 1e-05)
+ [WARN] val_mse_vs_mean_action: 0.1977 vs 0.1952 (val MSE < constant mean-action baseline; WARN only in smoke)
+METRICS
+ data = pusht-data-smoke
+ steps = 50 (batch 8)
+ resumed_from_step = 0
+ train_samples = 200
+ val_source = train episode seed 1 (smoke: no val episodes)
+ val_samples = 64
+ actions = logged (noisy)
+ loss_first_last = 0.3661 -> 0.3100
+ it_per_s = 8.14
+ projected_20k_steps = 40m58s
+ peak_gpu_mem = n/a (cpu)
+ val_mse = 0.1977 (mean-action baseline 0.1952)
+ val_action_err_px = 29.4 (mean-action baseline 29.4)
+ val_z_std = 0.006 (info only; no variance hinge)
+ lr_final = 3.65e-07
+SAVED
+ outputs/train_bc/artifact/model.pt
+ outputs/train_bc/artifact/train_summary.json
+ outputs/train_bc/artifact/config.yaml
+ store/ckpt-bc-smoke
+W&B: off
+====================================================
+==================== RUN REPORT ====================
+job: train_probe   mode: smoke   platform: local   device: cpu
+git: 3c6f9a2-dirty   time: 2.9s   params: 1,740,518
+CHECKS
+ [PASS] param_counts: encoder 1,738,976 / head 1,542 / total 1,740,518 (== CLAUDE.md §7)
+ [PASS] losses_finite: all finite (no NaN/inf)
+ [PASS] loss_fell: 0.3316 -> 0.0154 (mean of last 10 < first 10 steps)
+ [PASS] checkpoint_roundtrip: outputs: weights identical, max |diff| 0.00e+00 (rel 0.00e+00) (model.pt weights bit-identical; outputs allclose rtol 0.0001, atol 1e-05)
+ [PASS] test_block_px_vs_mean: 104.2 vs 142.0 (mean block error < predict-train-mean baseline; WARN only in smoke)
+METRICS
+ data = pusht-data-smoke
+ steps = 50 (batch 16)
+ resumed_from_step = 0
+ train_frames = 202
+ val_source = train episode seed 1 (smoke: no val episodes)
+ test_frames = 101
+ loss_first_last = 0.3316 -> 0.0154
+ it_per_s = 22.30
+ projected_10k_steps = 7m28s
+ peak_gpu_mem = n/a (cpu)
+ test_block_px = mean 104.24 / median 122.84 px (mean baseline 142.03)
+ test_block_deg = mean 103.20 / median 129.04 deg (mean baseline 82.06)
+ test_pusher_px = mean 161.58 / median 188.15 px (mean baseline 164.36)
+ val_block_px_mean = 16.96
+ test_z_std = 0.058 (info only; no variance hinge)
+ lr_final = 3.65e-07
+SAVED
+ outputs/train_probe/artifact/model.pt
+ outputs/train_probe/artifact/train_summary.json
+ outputs/train_probe/artifact/config.yaml
+ store/ckpt-probe-smoke
+W&B: off
+====================================================
+GROUP overnight: OK (6 of 6 passed or skipped) | PASS train_wm, diagnose_wm, train_wm_1step, train_pixel, train_bc, train_probe
 ```
 
 ## Phase 4 local smoke REPORTs (train_baselines)

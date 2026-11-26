@@ -8,7 +8,7 @@ import torch
 
 from wm.data.windows import WindowData
 from wm.jobs import JobContext
-from wm.jobs._trainer import TrainingJob, load_npz, same_outputs
+from wm.jobs._trainer import TrainingJob, check_roundtrip, load_npz, roundtrip
 from wm.models.pixel_unet import (EXPECTED_PARAMS, PARAM_TOLERANCE, WM_PARAMS, build_pixel_unet,
                                   param_counts, within_tolerance)
 from wm.report import Report
@@ -48,11 +48,10 @@ def run(ctx: JobContext, report: Report) -> None:
     model_path = job.save_model(model, step)
     reloaded = build_pixel_unet(cfg).to(device)
     reloaded.load_state_dict(torch.load(model_path, map_location=device, weights_only=True)["model"])
-    model.eval(); reloaded.eval()
     frames, actions = data.gather(data.val_starts[:2])
     c = model.context
-    same = same_outputs(lambda f: model(f, actions[:, c - 1]), lambda f: reloaded(f, actions[:, c - 1]),
-                        frames[:, :c])
+    rt = roundtrip(model, reloaded, lambda f: model(f, actions[:, c - 1]),
+                   lambda f: reloaded(f, actions[:, c - 1]), frames[:, :c])
 
     vstart = data.fixed_val_starts_of(c + horizon, 1, tcfg["val_seed"])[0]
     real, pred = predicted_rollout(model, data, vstart, horizon)
@@ -62,8 +61,7 @@ def run(ctx: JobContext, report: Report) -> None:
 
     # ---- checks ----
     job.loss_checks(report, summary, log, LOSS_KEYS)
-    report.check_true("checkpoint_roundtrip", same, "identical predictions" if same else "mismatch",
-                      "model.pt reload == trained model")
+    check_roundtrip(report, rt, "predictions")
     beat = val["mse"][0] < val["mse_copy_last"][0]
     report.check("one_step_vs_copy_last", "PASS" if beat else ("WARN" if ctx.mode == "smoke" else "FAIL"),
                  f"{val['mse'][0]:.5f} vs {val['mse_copy_last'][0]:.5f}",
