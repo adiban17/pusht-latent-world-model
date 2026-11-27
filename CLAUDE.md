@@ -18,7 +18,7 @@ All models train on the same 20,000 transitions.
 1. **Never invent, hard-code or "estimate" results.** Every number in the README or any table comes from `results/*.json` written by an evaluation script. If a run hasn't happened, the table says `pending`.
 2. **The local machine is an M1 Mac. CPU only. Never use MPS.** Device = `cuda` if available, else `cpu`. Locally, every job runs in smoke mode only; `run.py --mode full` must refuse to run on the local platform (except `make_report`).
 3. **Real runs happen on Kaggle (fallback: Colab), T4 GPU,** through the single runner notebook and `run.py` (see §10). The notebook's code never changes between phases; only `JOB`, `MODE` and `EXTRA` in cell 2 change.
-4. **Never push.** Commit after each phase (and each fix) with a clear message; Aditya pushes with GitHub Desktop.
+4. **Never push.** Commit after each phase (and each fix) with a clear message; Aditya pushes with GitHub Desktop. **No attribution:** never add `Co-Authored-By` or any other Claude/Anthropic trailer or footer to commit messages or PR descriptions (also set in `.claude/settings.json`).
 5. **Reproducibility:** seed python/numpy/torch; save `config.yaml`, git short hash (+ dirty flag; changes under `results/` and `outputs/` don't count), parameter counts and wall-clock time with every checkpoint and every results JSON.
 6. **Plain PyTorch.** No Lightning, no Hydra. Type hints, short docstrings, small files. Clarity over cleverness; this code will be explained in an interview.
 7. **Tests:** every phase adds CPU tests under `tests/` (pytest). Run them before every commit.
