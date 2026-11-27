@@ -63,9 +63,11 @@ pusht-latent-world-model/
 │   ├── eval/angle_audit.py  judges.py   # Phase 5b: angle conventions, template oracle; judge errors
 │   ├── eval/planning.py         # success, Wilson CI, BC / sweep selection rules, tau
 │   ├── eval/stats.py  final.py  final_summary.py   # Phase 7: McNemar, Holm, bootstraps; tags, bins, tests; summary.md
+│   ├── eval/readme.py           # Phase 8: facts/tables from results JSONs -> README.md, docs/readme_sources.md
 │   ├── jobs/                    # one module per job in jobs.yaml
 │   └── viz/                     # GIFs, filmstrips, plots
 ├── scripts/make_readme_tables.py
+├── docs/README.template.md  readme_sources.md   # README prose with placeholders; number -> source list
 ├── notebooks/runner.ipynb       # the three cells of §10, nothing else
 └── tests/
 ```

@@ -62,9 +62,12 @@ def test_unknown_job(capsys):
     assert "unknown job" in capsys.readouterr().out
 
 
-def test_unbuilt_job(capsys):
-    assert run.main(["--job", "make_report"]) == 2
-    assert "not built yet (Phase 8)" in capsys.readouterr().out
+def test_unbuilt_job(capsys, monkeypatch):
+    reg = run.load_registry()
+    reg["jobs"]["not_a_job"] = {"phase": 9, "module": "wm.jobs.not_a_job", "config": None, "needs": [], "makes": []}
+    monkeypatch.setattr(run, "load_registry", lambda: reg)
+    assert run.main(["--job", "not_a_job"]) == 2
+    assert "not built yet (Phase 9)" in capsys.readouterr().out
 
 
 def test_collect_data_smoke_then_skip(capsys, isolated_dirs):
