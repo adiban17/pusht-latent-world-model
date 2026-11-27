@@ -29,8 +29,9 @@ import torch
 from wm.data.windows import frames_to_model
 from wm.envs.pusht import SUCCESS_POS_PX, get_state, pose_error, render64, reset_to_state
 from wm.models.bc import delta_to_target
-from wm.planning.cem import (CEMConfig, cem, deltas_to_waypoints, latent_cost, shift_warm_start,
-                             waypoints_to_actions)
+from wm.planning.cem import (CEMConfig, cem, deltas_to_waypoints, horizon_cost, latent_distances,
+                             pixel_distances, shift_warm_start, waypoints_to_actions)
+from wm.planning.goal_mask import goal_weight
 
 CONTEXT = 3
 
@@ -117,13 +118,28 @@ class _CEMBase(Policy):
 
     def __init__(self, wm: torch.nn.Module, cfg: CEMConfig, device, name: str):
         self.wm, self.cfg, self.device, self.name = wm.eval(), cfg, device, name
+        if cfg.cost_space not in ("latent", "pixel"):
+            raise ValueError(f"cost_space must be 'latent' or 'pixel', got {cfg.cost_space!r}")
+        if cfg.cost_space == "pixel" and getattr(wm, "fg_mean", None) is None:
+            raise RuntimeError("cost_space 'pixel' needs a world model trained with fg_weight (fg_mean)")
 
     def reset(self, goal_frame: np.ndarray, gen: torch.Generator) -> None:
         super().reset(goal_frame, gen)
         with torch.no_grad():
             g = frames_to_model(torch.as_tensor(goal_frame)[None]).to(self.device)
             self.z_goal = self.wm.encode(g)[0].float()
+            if self.cfg.cost_space == "pixel":   # Phase 6b: weighted pixel distance to the goal image
+                self.goal_img = g[0].float()
+                self.goal_w, self.mask_info = goal_weight(self.wm, goal_frame, self.device)
         self.prev: torch.Tensor | None = None
+
+    def distances(self, z_hat: torch.Tensor) -> torch.Tensor:
+        """Per-step goal distances [N, H] in the configured cost space."""
+        if self.cfg.cost_space == "latent":
+            return latent_distances(z_hat, self.z_goal)
+        n, h = z_hat.shape[:2]
+        frames = self.wm.decode(z_hat.flatten(0, 1)).view(n, h, 3, 64, 64)
+        return pixel_distances(frames, self.goal_img, self.goal_w)
 
     def prepare(self, hist: History) -> None:
         """Encode the current context once per step (before the CEM rounds)."""
@@ -140,7 +156,7 @@ class _CEMBase(Policy):
 
         def score(deltas: torch.Tensor) -> torch.Tensor:
             acts = waypoints_to_actions(deltas_to_waypoints(p, deltas)).to(self.device)
-            return latent_cost(self.imagine(acts), self.z_goal, self.cfg.beta)
+            return horizon_cost(self.distances(self.imagine(acts)), self.cfg.beta)
 
         mu0 = shift_warm_start(self.prev, self.cfg.horizon) if self.cfg.warm_start else torch.zeros(self.cfg.horizon, 2)
         res = cem(score, mu0, self.cfg, self.gen)
@@ -148,7 +164,7 @@ class _CEMBase(Policy):
         # the best plan's imagined latents (one extra rollout of a single candidate)
         acts = waypoints_to_actions(deltas_to_waypoints(p, res["best"][None])).to(self.device)
         z_best = self.imagine(acts)[0].float()
-        terminal = float(((z_best[-1] - self.z_goal) ** 2).sum())
+        terminal = float(self.distances(z_best[None])[0, -1])
         target = deltas_to_waypoints(p, res["best"][None])[0, 0].numpy()
         return target.astype(np.float32), {"cost": res["best_cost"], "terminal_cost": terminal,
                                            "plan_z": z_best.cpu()}
@@ -183,6 +199,8 @@ class PixelCEMPolicy(_CEMBase):
 
     def __init__(self, unet: torch.nn.Module, wm: torch.nn.Module, cfg: CEMConfig, device,
                  amp: bool = True, name: str = "cem_pixel"):
+        if cfg.cost_space != "latent":
+            raise ValueError("PixelCEMPolicy supports cost_space 'latent' only")
         super().__init__(wm, cfg, device, name)
         self.unet = unet.eval()
         self.amp = amp and torch.device(device).type == "cuda"

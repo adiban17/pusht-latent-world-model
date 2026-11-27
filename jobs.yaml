@@ -113,6 +113,12 @@ jobs:
     config: configs/plan.yaml
     needs: [pusht-data, eval-pairs, ckpt-wm]
     makes: [results-plan-sweep]
+  plan_cost_ablation:   # Phase 6b: pre-registered diagnostic, cem_wm cost_space latent vs pixel on val pairs
+    phase: 6
+    module: wm.jobs.plan_cost_ablation
+    config: configs/plan_cost_ablation.yaml
+    needs: [pusht-data, eval-pairs, ckpt-wm, results-plan-val]
+    makes: [results-plan-cost-ablation]
   final_eval:
     phase: 7
     module: wm.jobs.final_eval

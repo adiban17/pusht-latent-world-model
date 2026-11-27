@@ -56,6 +56,14 @@ def summarize(episodes: list[dict[str, Any]], pairs: list[dict[str, Any]]) -> di
         "median_final_ang_deg": float(np.median([abs(e["final_ang_deg"]) for e in episodes])),
         "mean_steps_to_success": (float(np.mean([e["steps"] for e in episodes if e["success"]]))
                                   if any(succ) else None),
+        # Phase 6b: direct test of the angle-insensitivity hypothesis (episodes that reached position)
+        "pos_reached_n": int(sum(pos)),
+        "pos_reached_median_final_ang_deg": (float(np.median([abs(e["final_ang_deg"]) for e in episodes
+                                                              if e["pos_success"]])) if any(pos) else None),
+        "pos_reached_failed_n": int(sum(p and not s_ for p, s_ in zip(pos, succ))),
+        "pos_reached_failed_median_final_ang_deg": (
+            float(np.median([abs(e["final_ang_deg"]) for e in episodes if e["pos_success"] and not e["success"]]))
+            if any(p and not s_ for p, s_ in zip(pos, succ)) else None),
         "seconds_per_episode": float(np.mean([e["seconds"] for e in episodes])),
         "policy_s_per_step": float(sum(e["policy_s"] for e in episodes) / max(1, sum(e["steps"] for e in episodes))),
         "env_s_per_step": float(sum(e["env_s"] for e in episodes) / max(1, sum(e["steps"] for e in episodes))),
@@ -132,3 +140,61 @@ def calibrate_tau(z: np.ndarray, states: np.ndarray, episode_of: np.ndarray, per
             "median_non_success": float(np.median(fail)) if len(fail) else None,
             "definition": "pct of ||E_wm(o_i) - E_wm(o_j)||^2 over same-val-episode frame pairs with "
                           "is_success(s_i, s_j); imagined success = terminal ||z_H - z_g||^2 < tau"}
+
+
+def same_episode_pairs(states: np.ndarray, episode_of: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Ordered pairs (i, j), i != j, of frames from the same episode -> (i, j, is_success(s_i, s_j))."""
+    ii, jj, ss = [], [], []
+    for e in np.unique(episode_of):
+        idx = np.flatnonzero(episode_of == e)
+        m = success_matrix(states[idx])
+        a, b = np.nonzero(~np.eye(len(idx), dtype=bool))
+        ii.append(idx[a]); jj.append(idx[b]); ss.append(m[a, b])
+    return np.concatenate(ii), np.concatenate(jj), np.concatenate(ss)
+
+
+def calibrate_tau_pixel(distance, states: np.ndarray, episode_of: np.ndarray, percentile: float = 95.0,
+                        max_pairs: int = 20000, seed: int = 0) -> dict[str, Any]:
+    """Phase 6b τ_pixel: the `percentile` of distance(i, j) = weighted pixel distance between
+    D_wm(E_wm(o_i)) and o_j (weight from o_j, pusher pixels removed) over ordered same-val-episode
+    pairs i != j whose states satisfy is_success. `distance(i [P], j [P]) -> [P]` (numpy)."""
+    i, j, ok = same_episode_pairs(states, episode_of)
+    rng = np.random.default_rng(seed)
+    succ, fail = np.flatnonzero(ok), np.flatnonzero(~ok)
+    if len(succ) == 0:
+        return {"tau": None, "n_success_pairs": 0, "percentile": percentile}
+    succ = rng.choice(succ, min(max_pairs, len(succ)), replace=False)
+    fail = rng.choice(fail, min(max_pairs, len(fail)), replace=False) if len(fail) else fail
+    ds = distance(i[succ], j[succ])
+    df = distance(i[fail], j[fail]) if len(fail) else np.zeros(0)
+    return {"tau": float(np.percentile(ds, percentile)), "percentile": percentile,
+            "n_success_pairs": int(len(ds)), "median_success": float(np.median(ds)),
+            "median_non_success": float(np.median(df)) if len(df) else None,
+            "definition": "pct of mean(w_j * (clip(D_wm(E_wm(o_i))) - o_j)^2) over ordered same-val-episode "
+                          "frame pairs with is_success(s_i, s_j); w_j = 1 + 20 * (fg AND NOT pusher) from o_j; "
+                          "imagined success = terminal pixel distance < tau_pixel"}
+
+
+def select_cost_arm(latent: dict[str, Any], pixel: dict[str, Any], margin: int = 3) -> tuple[bool, str]:
+    """Phase 6b rule: cost_space = pixel joins Phase 7 (as "post-hoc diagnostic, chosen on val")
+    only with >= margin more successes than the latent arm; the latent default stays the headline."""
+    a, b = latent["success"]["k"], pixel["success"]["k"]
+    joins = b >= a + margin
+    return joins, (f"pixel {b} vs latent {a} successes (needs >= {a + margin}): "
+                   + ("joins Phase 7 as 'post-hoc diagnostic, chosen on val'" if joins else "does not join Phase 7"))
+
+
+def compare_runs(ours: list[dict[str, Any]], ref: list[dict[str, Any]], ours_setup: dict[str, Any],
+                 ref_setup: dict[str, Any]) -> dict[str, Any]:
+    """Per-pair agreement of two runs' success flags (episode records), if their setups match
+    (pairs, budget, seed); otherwise {'comparable': False, 'reason': ...}."""
+    diff = [k for k in ("budget", "seed") if ours_setup.get(k) != ref_setup.get(k)]
+    if [r["pair"] for r in ours] != [r["pair"] for r in ref]:
+        diff.append("pairs")
+    if diff:
+        return {"comparable": False, "reason": "different " + ", ".join(diff)}
+    agree = sum(a["success"] == b["success"] for a, b in zip(ours, ref))
+    return {"comparable": True, "n": len(ours), "agree": int(agree),
+            "ours_success": int(sum(a["success"] for a in ours)), "ref_success": int(sum(b["success"] for b in ref)),
+            "only_ours": int(sum(a["success"] and not b["success"] for a, b in zip(ours, ref))),
+            "only_ref": int(sum(b["success"] and not a["success"] for a, b in zip(ours, ref)))}

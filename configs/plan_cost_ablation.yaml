@@ -1,0 +1,16 @@
+# Phase 6b diagnostic (pre-registered in PROGRESS.md): cem_wm with cost_space latent vs pixel on the
+# 50 val pairs. CEM settings, budget and seed come from the frozen configs/plan.yaml (never changed here).
+plan_config: configs/plan.yaml
+arms:                      # name -> cost_space
+  cem_wm: latent           # the frozen default (Phase 6)
+  cem_wm_pixelcost: pixel  # weighted pixel distance D_wm(z_hat) vs goal frame, pusher pixels at weight 1
+margin: 3                  # pixel joins Phase 7 only with >= 3 more successes than latent
+tau_percentile: 95
+tau_max_pairs: 20000
+timing_calls: 3            # full-size planning calls timed per arm
+reference: results-plan-val   # reproduction check: latent arm vs plan_val's cem_wm (WARN only)
+smoke:
+  pairs: 3
+  budget: 10
+  tau_max_pairs: 2000
+  timing_calls: 1

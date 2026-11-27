@@ -1,6 +1,6 @@
 # PROGRESS
 
-**Current phase: 6 DONE (Kaggle full; CEM config frozen = default; BC for the test = bc_clean) → 6b (pre-registered cost_space diagnostic, below).** Next: I build `plan_cost_ablation` and smoke it locally; Aditya pushes and runs it on Kaggle (smoke → full) and drops `results/plan_cost_ablation.json` into `results/`. Then Phase 7.
+**Current phase: 6 DONE (Kaggle full; CEM config frozen = default; BC for the test = bc_clean) → 6b (pre-registered cost_space diagnostic, below).** `plan_cost_ablation` is built and its local smoke passes. Next: Aditya pushes and runs it on Kaggle (smoke → full) and drops `results/plan_cost_ablation.json` into `results/`. Then Phase 7.
 
 ## Status
 | Phase | Status | Local smoke | Kaggle smoke | Kaggle full |
@@ -13,7 +13,7 @@
 | 5 Rollout eval | Kaggle full done (adc200d); judge failed → 5b | PASS | PASS | PASS (`results/rollouts.json`) |
 | 5b Angle audit + judges | **DONE** (judges frozen, see Decisions) | PASS | PASS | PASS (`results/angle_audit.json`, `results/rollouts.json`) |
 | 6 Planner | **DONE** (frozen: default; bc_selected = bc_clean) | PASS | PASS | PASS (`results/plan_val.json`, `results/plan_sweep.json`) |
-| 6b Cost-space diagnostic | pre-registered; building | – | – | – |
+| 6b Cost-space diagnostic | built; local smoke PASS | PASS | pending | pending |
 | 7 Final eval | not started | – | – | – |
 | 8 Report | not started | – | – | – |
 
@@ -178,6 +178,12 @@
     - a debug PNG (goal | weight mask | decoded predicted frame).
   - **Reproduction check (WARN):** `latent_arm_reproduces_plan_val` compares the latent arm with plan_val's cem_wm (expects 13/50 and identical per-pair outcomes) and reports the agreement count. Both ran fp32 (CEMPolicy has no autocast; the T4 has no TF32), so any mismatch is cuDNN nondeterminism.
   - **Decision rule:** cost_space = pixel joins Phase 7 as an extra arm labelled **"post-hoc diagnostic, chosen on val"** only if it gets **≥ 3 more successes than the latent arm in this job**. The frozen latent default stays the headline either way. No other setting changes.
+- **Phase 6b build (2026-11-27), implementation details (no results yet):**
+  - `wm/planning/goal_mask.py` (pusher / scene colours with pointers to gym-pusht's render code, `pusher_mask`, `goal_weight`); `CEMConfig.cost_space`; `pixel_distances` / `pixel_cost` / `horizon_cost` in `wm/planning/cem.py`; `_CEMBase.distances` in `mpc.py`. The latent path computes exactly what it did before (same ops), so plan_val is reproducible; PixelCEMPolicy refuses cost_space pixel.
+  - `plan_cost_ablation` reads CEM settings, budget and seed from the frozen plan.yaml (CHECK `plan_config_frozen`), needs `results-plan-val` for the reproduction check (hash unchanged thanks to the `frozen` normalisation) and reports it as `not comparable` when the setups differ (the Kaggle smoke reads the full plan_val: different budget).
+  - τ_pixel uses ordered same-episode pairs (decoded o_i vs real o_j), at most 20,000 success pairs (smoke 2,000), weights from o_j with the pusher removed. The JSON also stores the median over non-success pairs for scale.
+  - Debug PNG `goal_mask_debug.png`: goal | mask (white ×21, grey = pusher removed, black ×1) | decoded terminal frame of the first pixel-arm planning step.
+  - Local smoke: the latent arm reproduced the local plan_val smoke exactly (same per-pair outcomes, same median final pos 94.9 px / angle 60.0°). The pusher mask removed 5.6% of fg pixels over the goal frames.
 - **Phase 5b results (Kaggle full; sources `results/angle_audit.json` (git 0382f7a) and `results/rollouts.json` (schema 2, git 0382f7a-dirty, 500 test windows); the Phase 5 `rollouts.json` is in git history at a343e14):**
   - **angle_audit:** no label bug (rerender, orientation, CoG convention, round trip all clean); verdict "labels consistent; failure = probe generalisation (memorisation)". v1 probe angle: train 13.4° vs val 84.8°. Template oracle (non-learned, true position given), 200 frames each: real 1.4° mean, wm_recon 5.6°, wm1step_recon 3.4°, pixel_1step 1.9°.
   - **probe_mix (flatten, best step 19000): NOT accepted.** Failed pre-registered checks: real angle 46.5° (gate < 15°), real block 15.5 px (gate ≤ 13.4), wm_recon pusher 117.0 px and wm1step_recon pusher 117.5 px (gate ≤ 1.5 × real 53.5 = 80.3 px). Passed: block px on every derived type and pixel_1step pusher. Test block px by frame type: real 15.5 / wm_recon 14.1 / wm1step_recon 15.7 / pixel_1step 14.5.
@@ -234,158 +240,55 @@ python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, py
 - Local `projected_30k_steps` (2h07m) is CPU at batch 4; the real projection comes from the Kaggle smoke.
 - **Phase 4 Kaggle budget:** `train_baselines` full = wm_1step 30k + pixel 30k + BC 20k (batch 256 × 4 images) + probe 10k steps in one group. The Kaggle smoke's four `projected_*` lines tell us whether it fits one 12 h session; if not, rerunning the same cell skips finished jobs and resumes the unfinished one from its last checkpoint.
 - BC smoke `val_z_std` = 0.006 (50 CPU steps). No CHECK by design; watch it on the Kaggle full run.
+- **Phase 6b mask, to check on the Kaggle debug PNG:** in the local smoke model the static green goal region also counts as fg (×21), because the smoke mean frame comes from 2 episodes in which the block often covers it. This is the pre-registered training rule, left unchanged. With 190 train episodes the mean there should be close to the green, so check `goal_mask_debug.png` from the Kaggle run.
 - **Imagined vs real (Phase 6 full):** cem_wm 45 imagined successes, 33 false; cem_pixel 47 / 30; cem_wm_1step 29 / 17. Expect `model_error` to dominate Phase 7's failure tags for cem_wm.
 - **Phase 6:** the goal frame also shows the pusher at goal time, and z_g carries whatever pusher information E_wm keeps, so the cost may also pull the pusher toward its goal-time position. Known; the cost stays image-only as pre-registered.
 - **Phase 6 T4 estimates (from FLOP counts, not measured; the Kaggle smoke's timing lines replace them):** train_bc_clean ~15–30 min (as train_bc); plan_val without cem_pixel ~5–10 min; cem_pixel +10–30 min for 50 pairs; plan_sweep ~10–20 min; `phase6` full ~0.5–1.5 h.
 - **Mac only:** on import, macOS prints `objc ... Class SDL... is implemented in both cv2/.dylibs/libSDL2 and pygame/.dylibs/libSDL2` to stderr, because both OpenCV wheels bundle SDL2 on macOS. It's harmless with `SDL_VIDEODRIVER=dummy` and all tests pass. It doesn't occur on Kaggle/Colab (Linux).
 
-## Last REPORTs (local smoke, `phase6` group; smoke numbers mean nothing)
-The Phase 5b local smoke REPORTs are in commit 0382f7a's PROGRESS.md.
-GROUP phase6: OK (4 of 4 passed or skipped) | PASS make_pairs, train_bc_clean, plan_val, plan_sweep
+## Last REPORTs (local smoke, `plan_cost_ablation`; smoke numbers mean nothing)
+The Phase 6 local smoke REPORTs (`phase6` group) are in commit e3b8671's PROGRESS.md.
 ```
 ==================== RUN REPORT ====================
-job: make_pairs   mode: smoke   platform: local   device: cpu
-git: 0382f7a-dirty   time: 0.1s   params: n/a
-CHECKS
- [PASS] pairs_val: 3 of 13 candidates from 1 episodes (train episode seed 1 (smoke: no val episodes)) (== 3)
- [PASS] pairs_test: 3 of 12 candidates from 1 episodes (test episodes (pusht_test.npz)) (== 3)
-METRICS
- val_pairs = 3: rotation (|turn| >= 20 deg) 3, translation 0; median move 95.7 px, median |turn| 60.0 deg
- test_pairs = 3: rotation (|turn| >= 20 deg) 3, translation 0; median move 68.0 px, median |turn| 63.2 deg
- data = pusht-data-smoke
-SAVED
- outputs/make_pairs/artifact/eval_pairs_val.json
- outputs/make_pairs/artifact/eval_pairs_test.json
- store/eval-pairs-smoke
-W&B: off
-====================================================
-==================== RUN REPORT ====================
-job: train_bc_clean   mode: smoke   platform: local   device: cpu
-git: 0382f7a-dirty   time: 9.2s   params: 2,528,482
-CHECKS
- [PASS] param_counts: encoder 1,738,976 / mlp 789,506 / total 2,528,482 (== CLAUDE.md §6 (≈2.53M))
- [PASS] losses_finite: all finite (no NaN/inf)
- [PASS] loss_fell: 0.1331 -> 0.1128 (mean of last 10 < first 10 steps)
- [PASS] checkpoint_roundtrip: actions: weights identical, max |diff| 0.00e+00 (rel 0.00e+00) (model.pt weights bit-identical; outputs allclose rtol 0.0001, atol 1e-05)
- [PASS] val_mse_vs_mean_action: 0.1212 vs 0.1212 (val MSE < constant mean-action baseline; WARN only in smoke)
-METRICS
- data = pusht-data-smoke
- steps = 50 (batch 8)
- resumed_from_step = 0
- train_samples = 200
- val_source = train episode seed 1 (smoke: no val episodes)
- val_samples = 64
- actions = clean
- loss_first_last = 0.1331 -> 0.1128
- it_per_s = 11.15
- projected_20k_steps = 29m54s
- peak_gpu_mem = n/a (cpu)
- val_mse = 0.1212 (mean-action baseline 0.1212)
- val_action_err_px = 24.2 (mean-action baseline 24.4)
- val_z_std = 0.025 (info only; no variance hinge)
- lr_final = 3.65e-07
-SAVED
- outputs/train_bc_clean/artifact/model.pt
- outputs/train_bc_clean/artifact/train_summary.json
- outputs/train_bc_clean/artifact/config.yaml
- store/ckpt-bc-clean-smoke
-W&B: off
-====================================================
-==================== RUN REPORT ====================
-job: plan_val   mode: smoke   platform: local   device: cpu
-git: 0382f7a-dirty   time: 1m31s   params: wm 4,186,053 / wm_1step 4,186,053 / bc 2,528,482 / bc_clean 2,528,482 / pixel 4,813,731
+job: plan_cost_ablation   mode: smoke   platform: local   device: cpu
+git: 79c5429-dirty   time: 51.2s   params: wm 4,186,053
 CHECKS
  [PASS] ckpt_config_hash_wm: ckpt-wm-smoke step 50: d4c8e342b0d6 (== d4c8e342b0d6, current config; complete: true)
- [PASS] ckpt_config_hash_wm_1step: ckpt-wm-1step-smoke step 50: dd5934291cbe (== dd5934291cbe, current config; complete: true)
- [PASS] ckpt_config_hash_bc: ckpt-bc-smoke step 50: dd9930d91fd0 (== dd9930d91fd0, current config; complete: true)
- [PASS] ckpt_config_hash_bc_clean: ckpt-bc-clean-smoke step 50: a4cd0cd8aef5 (== a4cd0cd8aef5, current config; complete: true)
- [PASS] ckpt_config_hash_pixel: ckpt-pixel-smoke step 50: 2438d918b486 (== 2438d918b486, current config; complete: true)
  [PASS] eval_pairs_hash: eval-pairs-smoke: 10a77495b6db (== 10a77495b6db (make_pairs current config))
+ [PASS] plan_config_frozen: frozen: True (configs/plan.yaml frozen: true)
+ [PASS] fg_mean_present: ckpt-wm has fg_mean (pixel cost needs the fg_weight mean frame)
  [PASS] pairs: 3 val pairs (train episode seed 1 (smoke: no val episodes)) (== 3)
- [PASS] all_methods_ran: cem_wm 3, cem_wm_1step 3, bc 3, bc_clean 3, random 3, noop 3, cem_pixel 3 (3 episodes each)
- [PASS] render_alignment_start: mean abs diff 0.000 (max 0.000) over 3 pairs (mean <= 0.5 uint8 levels: rendered start state == stored start frame)
- [PASS] render_alignment_goal: mean abs diff 0.000 (max 0.000) over 3 pairs (mean <= 0.5 uint8 levels: rendered goal state == stored goal frame)
- [PASS] noop_success_zero: 0/3 (== 0 (impossible by the pair filter; > 0 means a bug))
+ [PASS] all_arms_ran: cem_wm 3, cem_wm_pixelcost 3 (3 episodes each)
  [PASS] metrics_finite: all finite (no NaN/inf)
- [WARN] cem_wm_vs_random: 0 vs 0 successes (cem_wm > random; WARN only (a result, not a bug))
+ [PASS] latent_arm_reproduces_plan_val: 0/3 vs plan_val 0/3; 3/3 pairs agree (identical per-pair outcomes; WARN only)
 METRICS
  ckpt_wm = ckpt-wm-smoke step 50, git 3c6f9a2-dirty, config_hash d4c8e342b0d6, proprio True
- ckpt_wm_1step = ckpt-wm-1step-smoke step 50, git 3c6f9a2-dirty, config_hash dd5934291cbe, proprio True
- ckpt_bc = ckpt-bc-smoke step 50, git 3c6f9a2-dirty, config_hash dd9930d91fd0
- ckpt_bc_clean = ckpt-bc-clean-smoke step 50, git 0382f7a-dirty, config_hash a4cd0cd8aef5
- ckpt_pixel = ckpt-pixel-smoke step 50, git 3c6f9a2-dirty, config_hash 2438d918b486
  data = pusht-data-smoke
- pairs = 3 val pairs from eval-pairs-smoke (train episode seed 1 (smoke: no val episodes)): rotation 3, translation 0; budget 10; seed 0
- cem = N 128, H 10, rounds 4, K 12, beta 0.1, sigma 30 (floor 2), clip 50 px; cem_pixel episodes at N 16, rounds 2 (local smoke)
+ setup = 3 val pairs (train episode seed 1 (smoke: no val episodes)); budget 10; seed 0; CEM N 128, H 10, rounds 4, K 12, beta 0.1 (frozen configs/plan.yaml); fp32
  success_cem_wm = 0/3 = 0.0% [0.0, 56.1]
  pos_success_cem_wm = 0/3 = 0.0% [0.0, 56.1] (start >= 20 px) | all pairs 0/3
  groups_cem_wm = rotation (3 pairs): success 0/3, position-only 0/3 | translation (0 pairs): success 0/0, position-only 0/0
- final_err_cem_wm = median pos 94.9 px / angle 60.0 deg; mean steps-to-success n/a; 0.38 s/episode
- success_cem_wm_1step = 0/3 = 0.0% [0.0, 56.1]
- pos_success_cem_wm_1step = 0/3 = 0.0% [0.0, 56.1] (start >= 20 px) | all pairs 0/3
- groups_cem_wm_1step = rotation (3 pairs): success 0/3, position-only 0/3 | translation (0 pairs): success 0/0, position-only 0/0
- final_err_cem_wm_1step = median pos 94.7 px / angle 60.0 deg; mean steps-to-success n/a; 0.37 s/episode
- success_bc = 0/3 = 0.0% [0.0, 56.1]
- pos_success_bc = 0/3 = 0.0% [0.0, 56.1] (start >= 20 px) | all pairs 0/3
- groups_bc = rotation (3 pairs): success 0/3, position-only 0/3 | translation (0 pairs): success 0/0, position-only 0/0
- final_err_bc = median pos 91.1 px / angle 58.4 deg; mean steps-to-success n/a; 0.05 s/episode
- success_bc_clean = 0/3 = 0.0% [0.0, 56.1]
- pos_success_bc_clean = 0/3 = 0.0% [0.0, 56.1] (start >= 20 px) | all pairs 0/3
- groups_bc_clean = rotation (3 pairs): success 0/3, position-only 0/3 | translation (0 pairs): success 0/0, position-only 0/0
- final_err_bc_clean = median pos 93.4 px / angle 58.4 deg; mean steps-to-success n/a; 0.05 s/episode
- success_random = 0/3 = 0.0% [0.0, 56.1]
- pos_success_random = 0/3 = 0.0% [0.0, 56.1] (start >= 20 px) | all pairs 0/3
- groups_random = rotation (3 pairs): success 0/3, position-only 0/3 | translation (0 pairs): success 0/0, position-only 0/0
- final_err_random = median pos 83.9 px / angle 57.7 deg; mean steps-to-success n/a; 0.01 s/episode
- success_noop = 0/3 = 0.0% [0.0, 56.1]
- pos_success_noop = 0/3 = 0.0% [0.0, 56.1] (start >= 20 px) | all pairs 0/3
- groups_noop = rotation (3 pairs): success 0/3, position-only 0/3 | translation (0 pairs): success 0/0, position-only 0/0
- final_err_noop = median pos 95.6 px / angle 59.9 deg; mean steps-to-success n/a; 0.01 s/episode
- success_cem_pixel = 0/3 = 0.0% [0.0, 56.1]
- pos_success_cem_pixel = 0/3 = 0.0% [0.0, 56.1] (start >= 20 px) | all pairs 0/3
- groups_cem_pixel = rotation (3 pairs): success 0/3, position-only 0/3 | translation (0 pairs): success 0/0, position-only 0/0
- final_err_cem_pixel = median pos 93.5 px / angle 60.0 deg; mean steps-to-success n/a; 19.21 s/episode
- bc_selected = bc (median final pos px: bc 91.0617 vs bc_clean 93.4133); success bc 0/3 = 0.0% [0.0, 56.1] | bc_clean 0/3 = 0.0% [0.0, 56.1]
- timing_cem_wm = 0.046 s per full-size planning call (N 128, 4 rounds, H 10; mean of 1) + env 1.8 ms/step -> projected 1.9 s/episode, 1.6 min for 50 pairs (upper bound)
- timing_cem_wm_1step = 0.034 s per full-size planning call (N 128, 4 rounds, H 10; mean of 1) + env 1.7 ms/step -> projected 1.4 s/episode, 1.2 min for 50 pairs (upper bound)
- timing_cem_pixel = 29.799 s per full-size planning call (N 128, 4 rounds, H 10; mean of 1) + env 3.3 ms/step -> projected 1192.1 s/episode, 993.4 min for 50 pairs (upper bound)
- tau = 15.3833 = p95 of ||E(o_i) - E(o_j)||^2 over 721 same-episode val frame pairs that are successes (median 1.5220; non-success median 404.5698) [train episode seed 1 (smoke: no val episodes)]
- imagined_success_cem_wm = 0/3 episodes reached terminal cost < tau; 0 of them failed for real
- imagined_success_cem_wm_1step = 0/3 episodes reached terminal cost < tau; 0 of them failed for real
- imagined_success_cem_pixel = 1/3 episodes reached terminal cost < tau; 1 of them failed for real
+ final_err_cem_wm = median pos 94.9 px / angle 60.0 deg; mean steps-to-success n/a; 0.46 s/episode
+ angle_when_position_reached_cem_wm = median final angle n/a deg over 0 position-reached episodes; n/a deg over the 0 of them that failed (direct test of the angle-insensitivity hypothesis)
+ timing_cem_wm = 0.047 s per full-size planning call (mean of 1)
+ imagined_success_cem_wm = 0/3 episodes reached terminal distance < tau (15.38); 0 of them failed for real
+ success_cem_wm_pixelcost = 0/3 = 0.0% [0.0, 56.1]
+ pos_success_cem_wm_pixelcost = 0/3 = 0.0% [0.0, 56.1] (start >= 20 px) | all pairs 0/3
+ groups_cem_wm_pixelcost = rotation (3 pairs): success 0/3, position-only 0/3 | translation (0 pairs): success 0/0, position-only 0/0
+ final_err_cem_wm_pixelcost = median pos 86.6 px / angle 46.9 deg; mean steps-to-success n/a; 15.56 s/episode
+ angle_when_position_reached_cem_wm_pixelcost = median final angle n/a deg over 0 position-reached episodes; n/a deg over the 0 of them that failed (direct test of the angle-insensitivity hypothesis)
+ timing_cem_wm_pixelcost = 1.559 s per full-size planning call (mean of 1)
+ imagined_success_cem_wm_pixelcost = 0/3 episodes reached terminal distance < tau (0.06457); 0 of them failed for real
+ tau_latent = 15.383 = p95 over 721 same-episode val success pairs (median 1.522; non-success median 404.6) [train episode seed 1 (smoke: no val episodes)]
+ tau_pixel = 0.064575 = p95 over 1442 same-episode val success pairs (median 0.05119; non-success median 0.09327) [train episode seed 1 (smoke: no val episodes)]
+ pusher_mask_removed = mean 5.6% of fg-mask pixels removed over 3 goal frames (5.3% over the val frames)
+ discordant = pixel-only successes 0, latent-only 0, same outcome 3/3
+ reproduction = latent arm 0/3 vs results-plan-val-smoke (git 0382f7a-dirty) cem_wm 0/3; agree 3/3 (only ours 0, only plan_val 0)
+ cost_ablation_decision = pixel 0 vs latent 0 successes (needs >= 3): does not join Phase 7
 SAVED
- outputs/plan_val/artifact/plan_val.json
- outputs/plan_val/artifact/filmstrips
- store/results-plan-val-smoke
-W&B: off
-====================================================
-==================== RUN REPORT ====================
-job: plan_sweep   mode: smoke   platform: local   device: cpu
-git: 0382f7a-dirty   time: 11.6s   params: wm 4,186,053
-CHECKS
- [PASS] ckpt_config_hash_wm: ckpt-wm-smoke step 50: d4c8e342b0d6 (== d4c8e342b0d6, current config; complete: true)
- [PASS] eval_pairs_hash: eval-pairs-smoke: 10a77495b6db (== 10a77495b6db (make_pairs current config))
- [PASS] pairs: 3 val pairs (train episode seed 1 (smoke: no val episodes)) (== 3)
- [PASS] all_settings_ran: 9 settings (3 episodes each)
- [PASS] metrics_finite: all finite (no NaN/inf)
-METRICS
- ckpt_wm = ckpt-wm-smoke step 50, git 3c6f9a2-dirty, config_hash d4c8e342b0d6, proprio True
- data = pusht-data-smoke
- pairs = 3 val pairs (train episode seed 1 (smoke: no val episodes)); budget 10; seed 0; cem_wm only
- setting_default = success 0/3 = 0.0% [0.0, 56.1] | position-only 0/3 (start >= 20 px) | median pos 94.9 px | 0.47 s/ep | cost 5120
- setting_N=32 = success 0/3 = 0.0% [0.0, 56.1] | position-only 0/3 (start >= 20 px) | median pos 95.1 px | 0.48 s/ep | cost 1280
- setting_N=64 = success 0/3 = 0.0% [0.0, 56.1] | position-only 0/3 (start >= 20 px) | median pos 95.6 px | 0.32 s/ep | cost 2560
- setting_N=256 = success 0/3 = 0.0% [0.0, 56.1] | position-only 0/3 (start >= 20 px) | median pos 95.2 px | 0.67 s/ep | cost 10240
- setting_rounds=1 = success 0/3 = 0.0% [0.0, 56.1] | position-only 0/3 (start >= 20 px) | median pos 95.7 px | 0.17 s/ep | cost 1280
- setting_rounds=2 = success 0/3 = 0.0% [0.0, 56.1] | position-only 0/3 (start >= 20 px) | median pos 94.9 px | 0.26 s/ep | cost 2560
- setting_H=5 = success 0/3 = 0.0% [0.0, 56.1] | position-only 0/3 (start >= 20 px) | median pos 94.7 px | 0.25 s/ep | cost 2560
- setting_H=15 = success 0/3 = 0.0% [0.0, 56.1] | position-only 0/3 (start >= 20 px) | median pos 95.4 px | 0.65 s/ep | cost 7680
- setting_beta=0 = success 0/3 = 0.0% [0.0, 56.1] | position-only 0/3 (start >= 20 px) | median pos 95.7 px | 0.49 s/ep | cost 5120
- selected = default by pos_success (no variant has >= 3 more pos_success than default (0))
- frozen_cem = candidates 128, horizon 10, rounds 4, elites 12, delta_clip 50.0, sigma_init 30.0, sigma_floor 2.0, beta 0.1, warm_start True
-SAVED
- outputs/plan_sweep/artifact/plan_sweep.json
- store/results-plan-sweep-smoke
+ outputs/plan_cost_ablation/artifact/plan_cost_ablation.json
+ outputs/plan_cost_ablation/artifact/goal_mask_debug.png
+ store/results-plan-cost-ablation-smoke
 W&B: off
 ====================================================
 ```
