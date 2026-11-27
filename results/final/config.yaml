@@ -1,0 +1,121 @@
+plan_config: configs/plan.yaml
+seeds:
+- 0
+- 1
+- 2
+pixel_seeds:
+- 0
+order:
+- noop
+- random
+- bc_selected
+- cem_wm
+- cem_wm_1step
+- sweep
+- cem_pixel
+comparisons:
+- - cem_wm
+  - bc_selected
+- - cem_wm
+  - cem_wm_1step
+- - cem_wm
+  - cem_pixel
+alpha: 0.05
+bootstrap: 10000
+bootstrap_seed: 0
+bins:
+  move_px:
+  - 0
+  - 45
+  - 70
+  - 95
+  - null
+  turn_deg:
+  - 0
+  - 20
+  - 40
+  - 60
+  - 180
+gallery:
+  methods:
+  - cem_wm
+  - bc_selected
+  per_tag: 4
+  seed: 0
+sweep:
+  offsets:
+  - 10
+  - 30
+  methods:
+  - cem_wm
+  - bc_selected
+  n_pairs: 100
+  seed: 0
+timing_calls: 3
+smoke:
+  pairs: 3
+  budget: 10
+  seeds:
+  - 0
+  - 1
+  sweep_pairs: 3
+  bootstrap: 500
+  timing_calls: 1
+  tau_max_pairs: 2000
+plan:
+  seed: 0
+  frozen: true
+  budget: 40
+  cem:
+    candidates: 128
+    horizon: 10
+    rounds: 4
+    elites: 12
+    delta_clip: 50.0
+    sigma_init: 30.0
+    sigma_floor: 2.0
+    beta: 0.1
+    warm_start: true
+  methods:
+    cem_wm: true
+    cem_wm_1step: true
+    bc: true
+    bc_clean: true
+    random: true
+    noop: true
+    cem_pixel: true
+  random_sigma: 30.0
+  pixel_amp: true
+  timing:
+    calls: 3
+  selection:
+    sweep_margin: 3
+    sweep_floor: 2
+  tau_percentile: 95
+  tau_max_pairs: 20000
+  filmstrips: 3
+  sweep:
+    candidates:
+    - 32
+    - 64
+    - 128
+    - 256
+    rounds:
+    - 1
+    - 2
+    - 4
+    horizon:
+    - 5
+    - 10
+    - 15
+    beta:
+    - 0.0
+    - 0.1
+  smoke:
+    pairs: 3
+    budget: 10
+    local_pixel:
+      candidates: 16
+      rounds: 2
+    timing_calls: 1
+    tau_max_pairs: 2000

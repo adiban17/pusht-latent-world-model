@@ -1,6 +1,6 @@
 # PROGRESS
 
-**Current phase: 6b DONE (cost-space null: pixel cost 13/50 = latent 13/50, does not join Phase 7) → 7 built (pre-registered below); local `phase7` smoke passes.** Next: Aditya pushes, then runs `phase7` on Kaggle (smoke → full) and drops the contents of `results_bundle.zip` (except `all_results/`, already in the repo) into `results/final/`.
+**Current phase: 7 DONE (final evaluation on 200 test pairs; results in `results/final/`, see "Phase 7 results").** Next: Phase 8 (`make_report`, README generated from `results/*.json`). Nothing is tuned after final_eval.
 
 ## Status
 | Phase | Status | Local smoke | Kaggle smoke | Kaggle full |
@@ -14,7 +14,7 @@
 | 5b Angle audit + judges | **DONE** (judges frozen, see Decisions) | PASS | PASS | PASS (`results/angle_audit.json`, `results/rollouts.json`) |
 | 6 Planner | **DONE** (frozen: default; bc_selected = bc_clean) | PASS | PASS | PASS (`results/plan_val.json`, `results/plan_sweep.json`) |
 | 6b Cost-space diagnostic | **DONE** (null: pixel does not join Phase 7) | PASS | PASS | PASS (`results/plan_cost_ablation.json`) |
-| 7 Final eval | built (`phase7` = eval_imagined_angle → final_eval); local smoke PASS | PASS | pending | pending |
+| 7 Final eval | **DONE** (`phase7` full, git 67c7ffe) | PASS | not reported | PASS (`results/final/final_eval.json`, `results/final/imagined_angle.json`) |
 | 8 Report | not started | – | – | – |
 
 ## Decisions
@@ -297,7 +297,68 @@ Frozen configs and existing checkpoints only: no retraining, no tuning. Only `fi
 - **T4 estimate (from Phase 6 Kaggle timings, not measured):**
   - eval_imagined_angle ~5–8 min (1,500 × 72 renders);
   - final_eval ~70 min: cem_wm + cem_wm_1step 600 episodes each ~17 min; cem_pixel 200 × ~11.8 s ~40 min; BC / random / noop ~5 min; sweep ~4 min; τ, timing, gallery, bundle ~3 min;
-  - **`phase7` full ~75–80 min.**
+  - **`phase7` full ~75–80 min.** Measured on Kaggle: eval_imagined_angle 8.6 min, final_eval 57.5 min.
+
+## Phase 7 results (Kaggle `phase7` full, git 67c7ffe; GROUP phase7 OK, every CHECK PASS)
+Sources: `results/final/final_eval.json` (config_hash b0356a915445) and `results/final/imagined_angle.json` (config_hash f0b3658a35de). `results/final/summary.md` is generated from them and regenerates byte-identically with `scripts/make_final_summary.py`. Setup: 200 test pairs, budget 40, frozen plan.yaml (N 128, H 10, rounds 4, K 12, β 0.1), seeds 0/1/2 (cem_pixel seed 0 only), bc_selected = bc_clean. Render alignment 0.000 for start and goal frames.
+
+**Main table** (pooled = mean over the method's seeds, pair-clustered bootstrap 95% CI; seed 0 = Wilson):
+
+| method | seeds | success, pooled | success seed 0 | position-only, pooled | turning (n 180) | non-turning (n 20, low power) | median final pos px / angle ° | angle once position reached ° (n) | s / episode | s / planning call |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| noop | 3 | 0.0% [0.0, 0.0] | 0/200 [0.0, 1.9] | 0.0% | 0.0% | 0.0% | 70.6 / 43.9 | n/a (0) | 0.15 | – |
+| random | 3 | 10.5% [7.8, 13.3] | 24/200 [8.2, 17.2] | 17.2% [13.7, 20.8] | 8.7% | 26.7% | 54.2 / 39.9 | 18.0 (103) | 0.14 | – |
+| bc_clean | 3 | **67.5% [60.5, 74.0]** | 135/200 [60.7, 73.6] | 70.0% [63.5, 76.5] | 72.8% | 20.0% | 18.8 / 15.6 | 13.6 (420) | 0.15 | – |
+| **cem_wm** | 3 | 34.7% [28.3, 41.0] | 67/200 [27.3, 40.3] | 59.3% [53.0, 65.7] | 34.8% | 33.3% | 19.2 / 29.6 | 19.1 (356) | 0.75 | 0.022 |
+| cem_wm_1step | 3 | 25.2% [19.8, 30.8] | 48/200 [18.6, 30.4] | 37.7% [31.7, 43.7] | 23.7% | 38.3% | 31.3 / 30.7 | 17.4 (226) | 0.84 | 0.021 |
+| cem_pixel | 1 | 49.5% [42.5, 56.5] | 99/200 [42.6, 56.4] | 72.0% [65.5, 78.0] | 47.2% | 70.0% | 15.8 / 19.4 | 17.3 (144) | 10.20 | 0.437 |
+
+Per-seed successes: random 24 / 16 / 23, bc_clean 135 / 135 / 135, cem_wm 67 / 69 / 72, cem_wm_1step 48 / 48 / 55, cem_pixel 99. τ: wm 21.218, wm_1step 16.644.
+
+**Primary tests (pre-registered; exact McNemar on seed 0, Holm over 6; effect = paired bootstrap over pairs of the per-pair mean over each method's seeds, a − b):**
+
+| comparison | metric | seed 0 rates | discordant (a only / b only) | McNemar p | Holm p | claim | paired bootstrap diff [95% CI] |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| cem_wm vs bc_clean | success | 33.5% vs 67.5% | 15 / 83 | 1.4e-12 | 8.39e-12 | **bc_clean better** | −32.8 [−41.2, −24.5] pp |
+| cem_wm vs cem_wm_1step | success | 33.5% vs 24.0% | 38 / 19 | 0.0163 | 0.0327 | **cem_wm better** | +9.5 [+2.3, +16.7] pp |
+| cem_wm vs cem_pixel | success | 33.5% vs 49.5% | 11 / 43 | 1.4e-05 | 5.61e-05 | **cem_pixel better** | −14.8 [−21.2, −8.7] pp (3 vs 1 seeds) |
+| cem_wm vs bc_clean | position-only | 60.5% vs 70.0% | 34 / 53 | 0.053 | 0.053 | no claim | −10.7 [−19.3, −2.0] pp |
+| cem_wm vs cem_wm_1step | position-only | 60.5% vs 37.0% | 68 / 21 | 5.99e-07 | 2.99e-06 | **cem_wm better** | +21.7 [+13.8, +29.3] pp |
+| cem_wm vs cem_pixel | position-only | 60.5% vs 72.0% | 13 / 36 | 0.0014 | 0.00421 | **cem_pixel better** | −12.7 [−18.8, −6.7] pp (3 vs 1 seeds) |
+
+Note on cem_wm vs bc_clean, position-only: the bootstrap CI excludes 0 but Holm p = 0.053, so by the pre-registered rule there is **no claim**.
+
+**Imagined angle (template oracle on imagined frames, search reader = primary, 500 test windows): verdict "imagined rollouts lose the angle" = confirmed** (A and B both hold at k = 10).
+- Mean angle error at k = 10 [95% CI]: real 1.3 [1.2, 1.3], wm_recon 5.7 [4.3, 7.3], **wm 60.2 [55.8, 65.6]**, wm_1step 69.9 [65.1, 75.0], pixel 24.6 [21.0, 28.5], copy_last 46.7 [41.8, 51.9] (search), copy_last_exact 17.0 [15.7, 18.4].
+- wm across k: 7.0 → 36.2 → 60.2° at k = 1 / 5 / 10, so the decoder alone loses little (wm_recon ~5.5° at every k) and the rollout loses the rest.
+- Paired differences at k = 10: wm − wm_recon +54.5 [+49.6, +59.8] (A); wm − copy_last +13.5 [+6.9, +20.5] (search) and wm − copy_last_exact +43.2 [+38.7, +48.6] (B); **wm − wm_1step −9.6 [−16.0, −3.1]** (multi-step training helps a little); wm − pixel +35.7 [+30.4, +41.4].
+- Instrument: the search edge share at k = 10 is ≤ 5% for every row (wm 0%, wm_1step 3%, copy_last 5%); the true-position reader gives the same picture (wm 59.2° at k = 10).
+
+**Speed:** per full-size planning call cem_wm 0.022 s vs cem_pixel 0.437 s (~20×); per episode 0.75 vs 10.20 s.
+
+**Failure tags (all seeds; seed 0 in brackets):**
+
+| method | success | position_only | angle_only | both_failed | believed success but failed (model_error) | failed without it (search_error) |
+| --- | --- | --- | --- | --- | --- | --- |
+| noop | 0 (0) | 0 (0) | 60 (20) | 540 (180) | – | – |
+| random | 63 (24) | 18 (3) | 56 (20) | 463 (153) | – | – |
+| bc_clean | 405 (135) | 6 (2) | 69 (23) | 120 (40) | – | – |
+| cem_wm | 208 (67) | 116 (43) | 39 (13) | 237 (77) | 361 of 392 failed | 31 |
+| cem_wm_1step | 151 (48) | 42 (13) | 73 (22) | 334 (117) | 242 of 449 failed | 207 |
+| cem_pixel | 99 (99) | 38 (38) | 5 (5) | 58 (58) | 98 of 101 failed | 3 |
+
+cem_wm's failures are almost all `model_error` (the planner believed it had reached the goal), as the Phase 6 imagined-vs-real gap predicted. Its `position_only` tag (116) is the largest of any method: it reaches the block position but not the angle. bc_clean rarely ends position_only (6).
+
+**Exploratory (secondary, no claims): difficulty bins and goal-distance sweep.** cem_wm is competitive on short moves and degrades with distance:
+- move_px [0, 45) (n 43): success cem_wm 62.8% vs bc_clean 65.1% (cem_pixel 83.7%); position-only cem_wm 86.8% vs bc_clean 67.4%. At ≥ 95 px (n 54): cem_wm 13.0% vs bc_clean 66.7%. bc_clean is flat across move bins (60.7–78.7%).
+- |turn| [60, 180] (n 60): cem_wm 13.9%, cem_pixel 18.3%, bc_clean 75.0%.
+- Sweep (seed 0, 100 pairs each): offset 10 (median move 48.2 px, |turn| 28.2°): cem_wm 64/100 vs bc_clean 83/100 success, position-only 85 vs 84; offset 30 (93.0 px, 56.0°): cem_wm 20/100 vs bc_clean 51/100, position-only 56 vs 52.
+
+**Caveats:**
+- cem_pixel ran 1 seed (seed 0; pre-registered for compute), so its pooled CI covers pairs only, and its bootstrap differences compare 3 seeds with 1.
+- Non-turning pairs: n = 20, low power; those cells are not interpreted.
+- Difficulty bins and the goal sweep are exploratory and were not corrected for multiple comparisons.
+- Judge deviation from Phase 5b still applies to the rollout numbers carried into the README (latent judge primary, probe_mix not accepted).
 
 ## Installed versions (local)
 python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, pygame 2.6.1, opencv-python(-headless) 4.14.0.94, numpy 2.5.5, wandb 0.31.2.
@@ -312,7 +373,7 @@ python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, py
 - **Phase 4 Kaggle budget:** `train_baselines` full = wm_1step 30k + pixel 30k + BC 20k (batch 256 × 4 images) + probe 10k steps in one group. The Kaggle smoke's four `projected_*` lines tell us whether it fits one 12 h session; if not, rerunning the same cell skips finished jobs and resumes the unfinished one from its last checkpoint.
 - BC smoke `val_z_std` = 0.006 (50 CPU steps). No CHECK by design; watch it on the Kaggle full run.
 - ~~**Phase 6b mask, to check on the Kaggle debug PNG**~~ **Resolved (Phase 6b full):** in the full model the green goal region is not weighted and the pusher is removed (`results/goal_mask_debug.png`).
-- **Imagined vs real (Phase 6 full):** cem_wm 45 imagined successes, 33 false; cem_pixel 47 / 30; cem_wm_1step 29 / 17. Expect `model_error` to dominate Phase 7's failure tags for cem_wm.
+- **Imagined vs real (Phase 6 full):** cem_wm 45 imagined successes, 33 false; cem_pixel 47 / 30; cem_wm_1step 29 / 17. **Confirmed in Phase 7:** 361 of cem_wm's 392 test failures are `model_error`.
 - **Phase 6:** the goal frame also shows the pusher at goal time, and z_g carries whatever pusher information E_wm keeps, so the cost may also pull the pusher toward its goal-time position. Known; the cost stays image-only as pre-registered.
 - **Phase 6 T4 estimates (from FLOP counts, not measured; the Kaggle smoke's timing lines replace them):** train_bc_clean ~15–30 min (as train_bc); plan_val without cem_pixel ~5–10 min; cem_pixel +10–30 min for 50 pairs; plan_sweep ~10–20 min; `phase6` full ~0.5–1.5 h.
 - **Mac only:** on import, macOS prints `objc ... Class SDL... is implemented in both cv2/.dylibs/libSDL2 and pygame/.dylibs/libSDL2` to stderr, because both OpenCV wheels bundle SDL2 on macOS. It's harmless with `SDL_VIDEODRIVER=dummy` and all tests pass. It doesn't occur on Kaggle/Colab (Linux).
