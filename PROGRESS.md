@@ -1,6 +1,6 @@
 # PROGRESS
 
-**Current phase: 6 DONE (Kaggle full; CEM config frozen = default; BC for the test = bc_clean) → 6b (pre-registered cost_space diagnostic, below).** `plan_cost_ablation` is built and its local smoke passes. Next: Aditya pushes and runs it on Kaggle (smoke → full) and drops `results/plan_cost_ablation.json` into `results/`. Then Phase 7.
+**Current phase: 6b DONE (cost-space null: pixel cost 13/50 = latent 13/50, does not join Phase 7) → 7 (final evaluation, pre-registered below).**
 
 ## Status
 | Phase | Status | Local smoke | Kaggle smoke | Kaggle full |
@@ -13,7 +13,7 @@
 | 5 Rollout eval | Kaggle full done (adc200d); judge failed → 5b | PASS | PASS | PASS (`results/rollouts.json`) |
 | 5b Angle audit + judges | **DONE** (judges frozen, see Decisions) | PASS | PASS | PASS (`results/angle_audit.json`, `results/rollouts.json`) |
 | 6 Planner | **DONE** (frozen: default; bc_selected = bc_clean) | PASS | PASS | PASS (`results/plan_val.json`, `results/plan_sweep.json`) |
-| 6b Cost-space diagnostic | built; local smoke PASS | PASS | pending | pending |
+| 6b Cost-space diagnostic | **DONE** (null: pixel does not join Phase 7) | PASS | PASS | PASS (`results/plan_cost_ablation.json`) |
 | 7 Final eval | not started | – | – | – |
 | 8 Report | not started | – | – | – |
 
@@ -184,6 +184,19 @@
   - τ_pixel uses ordered same-episode pairs (decoded o_i vs real o_j), at most 20,000 success pairs (smoke 2,000), weights from o_j with the pusher removed. The JSON also stores the median over non-success pairs for scale.
   - Debug PNG `goal_mask_debug.png`: goal | mask (white ×21, grey = pusher removed, black ×1) | decoded terminal frame of the first pixel-arm planning step.
   - Local smoke: the latent arm reproduced the local plan_val smoke exactly (same per-pair outcomes, same median final pos 94.9 px / angle 60.0°). The pusher mask removed 5.6% of fg pixels over the goal frames.
+- **Phase 6b results (Kaggle `plan_cost_ablation` full, git 406d7be, config_hash 26e5d8dc66b3; source `results/plan_cost_ablation.json`; debug image `results/goal_mask_debug.png`):** cem_wm, 50 val pairs, budget 40, seed 0, frozen plan.yaml, fp32.
+
+  | arm | success [Wilson 95% CI, %] | position-only | median final angle, position reached (n) | imagined success (false) | s / episode |
+  | --- | --- | --- | --- | --- | --- |
+  | latent (frozen default) | 13/50 [15.9, 39.6] | 32/50 | 25.6° (32) | 45/50 (33) | 0.82 |
+  | pixel cost | 13/50 [15.9, 39.6] | 29/50 | 21.3° (29) | 50/50 (37) | 8.41 |
+
+  - **Decision (pre-registered rule, applied mechanically):** pixel 13 vs latent 13 successes (needs ≥ 16): **does NOT join Phase 7.** The frozen latent cost stays the only CEM cost.
+  - **Paired:** discordant 6 (pixel only) vs 6 (latent only), 38 agree.
+  - **Reproduction:** the latent arm is identical to plan_val's cem_wm on 50/50 pairs (13 vs 13): planning is fully deterministic on the T4.
+  - Other numbers: τ_pixel 0.0201 (p95 over 20,000 success pairs; τ_latent 21.22); the pusher mask removed 9.0% of fg pixels on the goal frames; full-size planning call 0.264 s (pixel) vs 0.022 s (latent).
+  - **Debug image (Aditya's reading):** the pusher is removed from the weight mask correctly, and the green goal region is not weighted in the full model (this resolves the Open issue about the smoke mask). The decoded 10-step imagined frame is a blurry blob with no readable T orientation.
+  - **Updated hypothesis (not a measured cause):** the angle is lost in the multi-step imagined rollout (blur), not only in how the cost measures distance. A sharper cost cannot recover an orientation the imagined frame no longer contains. Phase 7's `eval_imagined_angle` tests this with the template oracle on imagined frames.
 - **Phase 5b results (Kaggle full; sources `results/angle_audit.json` (git 0382f7a) and `results/rollouts.json` (schema 2, git 0382f7a-dirty, 500 test windows); the Phase 5 `rollouts.json` is in git history at a343e14):**
   - **angle_audit:** no label bug (rerender, orientation, CoG convention, round trip all clean); verdict "labels consistent; failure = probe generalisation (memorisation)". v1 probe angle: train 13.4° vs val 84.8°. Template oracle (non-learned, true position given), 200 frames each: real 1.4° mean, wm_recon 5.6°, wm1step_recon 3.4°, pixel_1step 1.9°.
   - **probe_mix (flatten, best step 19000): NOT accepted.** Failed pre-registered checks: real angle 46.5° (gate < 15°), real block 15.5 px (gate ≤ 13.4), wm_recon pusher 117.0 px and wm1step_recon pusher 117.5 px (gate ≤ 1.5 × real 53.5 = 80.3 px). Passed: block px on every derived type and pixel_1step pusher. Test block px by frame type: real 15.5 / wm_recon 14.1 / wm1step_recon 15.7 / pixel_1step 14.5.
@@ -223,7 +236,7 @@
   - plan_val saves 3 filmstrips (real frames 1..H | decoded imagined plan of the first step | goal) of the first cem_wm val episodes.
 
 ## Phase 7 TODO
-- **BC arm = bc_clean** (`bc_selected` in `results/plan_val.json`); cost_space = pixel joins only if Phase 6b's rule says so.
+- **BC arm = bc_clean** (`bc_selected` in `results/plan_val.json`); cost_space = pixel does **not** join (Phase 6b null).
 - **Seeds (pre-registered in Phase 6):** `final_eval` runs cem_pixel with planner seed 0 only; all other methods with 3 seeds.
 - (a) **Template-oracle angle on imagined frames:** a column with the template oracle (non-learned, true position given) on *imagined* frames for wm (decoded ẑ), wm_1step, pixel and copy_last at k = 1, 5, 10, to confirm or refute the learned judges' "wm imagined angle worse than copy_last" finding with the only trusted angle reader.
 - (b) **"-dirty" on Kaggle:** full-mode jobs write `results/*.json` into the checkout, so later jobs in the same session report git "-dirty" (e.g. `rollouts.json` shows 0382f7a-dirty). Exclude `results/` from the dirty check in `wm/repro.git_info`.
@@ -240,7 +253,7 @@ python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, py
 - Local `projected_30k_steps` (2h07m) is CPU at batch 4; the real projection comes from the Kaggle smoke.
 - **Phase 4 Kaggle budget:** `train_baselines` full = wm_1step 30k + pixel 30k + BC 20k (batch 256 × 4 images) + probe 10k steps in one group. The Kaggle smoke's four `projected_*` lines tell us whether it fits one 12 h session; if not, rerunning the same cell skips finished jobs and resumes the unfinished one from its last checkpoint.
 - BC smoke `val_z_std` = 0.006 (50 CPU steps). No CHECK by design; watch it on the Kaggle full run.
-- **Phase 6b mask, to check on the Kaggle debug PNG:** in the local smoke model the static green goal region also counts as fg (×21), because the smoke mean frame comes from 2 episodes in which the block often covers it. This is the pre-registered training rule, left unchanged. With 190 train episodes the mean there should be close to the green, so check `goal_mask_debug.png` from the Kaggle run.
+- ~~**Phase 6b mask, to check on the Kaggle debug PNG**~~ **Resolved (Phase 6b full):** in the full model the green goal region is not weighted and the pusher is removed (`results/goal_mask_debug.png`).
 - **Imagined vs real (Phase 6 full):** cem_wm 45 imagined successes, 33 false; cem_pixel 47 / 30; cem_wm_1step 29 / 17. Expect `model_error` to dominate Phase 7's failure tags for cem_wm.
 - **Phase 6:** the goal frame also shows the pusher at goal time, and z_g carries whatever pusher information E_wm keeps, so the cost may also pull the pusher toward its goal-time position. Known; the cost stays image-only as pre-registered.
 - **Phase 6 T4 estimates (from FLOP counts, not measured; the Kaggle smoke's timing lines replace them):** train_bc_clean ~15–30 min (as train_bc); plan_val without cem_pixel ~5–10 min; cem_pixel +10–30 min for 50 pairs; plan_sweep ~10–20 min; `phase6` full ~0.5–1.5 h.
