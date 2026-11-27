@@ -27,15 +27,20 @@ def seed_all(seed: int) -> None:
         pass
 
 
+DIRTY_IGNORE = ("results", "outputs")   # written by jobs themselves (Phase 7 fix: no false "-dirty")
+
+
 def git_info(repo: Path = REPO_ROOT) -> str:
-    """Short git hash, with '-dirty' if there are uncommitted changes; 'nogit' if unavailable."""
+    """Short git hash, with '-dirty' if there are uncommitted changes outside `results/` and
+    `outputs/` (full-mode jobs write results/*.json into the checkout); 'nogit' if unavailable."""
     try:
         sha = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, check=True,
         ).stdout.strip()
         dirty = subprocess.run(
-            ["git", "-C", str(repo), "status", "--porcelain"],
+            ["git", "-C", str(repo), "status", "--porcelain", "--", "."]
+            + [f":(exclude){d}" for d in DIRTY_IGNORE],
             capture_output=True, text=True, check=True,
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):

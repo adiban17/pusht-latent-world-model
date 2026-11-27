@@ -95,18 +95,55 @@ def mask_pose(frame: np.ndarray) -> dict[str, float] | None:
             "pixels": int(len(rows))}
 
 
+def template_candidates(env, state: np.ndarray, step_deg: float = 5.0) -> tuple[np.ndarray, np.ndarray]:
+    """(angles rad [A], frames uint8 [A, 64, 64, 3]): the block rendered every `step_deg` from
+    -180 deg, with its CoG and the pusher at their positions in `state`."""
+    cog = block_cog(state)
+    angles = np.radians(np.arange(-180.0, 180.0, step_deg))
+    cands = np.stack([render_state(env, pose_state(tuple(cog), a, (state[0], state[1]))) for a in angles])
+    return angles, cands
+
+
 def template_angle(env, frame: np.ndarray, state: np.ndarray, step_deg: float = 5.0) -> float:
     """Angle (rad) whose render, with the block's CoG and the pusher at their true positions,
     best matches `frame` (uint8 or float in [0, 255]) in pixel MSE."""
-    cog = block_cog(state)
+    angles, cands = template_candidates(env, state, step_deg)
     target = np.asarray(frame, np.float32)
     best, best_err = 0.0, np.inf
-    for a in np.radians(np.arange(-180.0, 180.0, step_deg)):
-        cand = render_state(env, pose_state(tuple(cog), a, (state[0], state[1]))).astype(np.float32)
+    for a, cand in zip(angles, cands.astype(np.float32)):
         err = float(((cand - target) ** 2).mean())
         if err < best_err:
             best, best_err = float(a), err
     return best
+
+
+def template_match(cands: np.ndarray, frames: np.ndarray, search_px: int = 4,
+                   device: str = "cpu") -> dict[str, np.ndarray]:
+    """Phase 7 search oracle: for each frame, the (candidate, shift) pair with the lowest pixel SSE
+    between the candidate's central (64 - 2s)^2 crop and the frame window shifted by (dy, dx),
+    over every integer shift |dy|, |dx| <= s = `search_px` (image px; 1 px = 8 world px).
+
+    cands [A, 64, 64, 3] and frames [R, 64, 64, 3] on the 0..255 scale. All shifts are scored at
+    once: the cross term is a conv2d with the candidate crops as kernels, ||F_window||^2 a conv2d
+    with a ones kernel (float64). Returns index [R] (into cands), dy, dx [R] (the block in the
+    frame sits (dy, dx) image px from the candidate's position) and edge [R] (a shift hit the limit).
+    """
+    import torch
+    import torch.nn.functional as F
+
+    s = int(search_px)
+    c = torch.as_tensor(np.asarray(cands, np.float64), device=device).movedim(-1, 1)    # [A, 3, 64, 64]
+    f = torch.as_tensor(np.asarray(frames, np.float64), device=device).movedim(-1, 1)   # [R, 3, 64, 64]
+    k = c[:, :, s:64 - s, s:64 - s] if s > 0 else c
+    cross = F.conv2d(f, k)                                               # [R, A, 2s+1, 2s+1]
+    f2 = F.conv2d(f * f, torch.ones_like(k[:1]))                         # [R, 1, 2s+1, 2s+1]
+    sse = f2 - 2.0 * cross + (k * k).sum(dim=(1, 2, 3))[None, :, None, None]
+    w = 2 * s + 1
+    flat = sse.flatten(1).argmin(1).cpu().numpy()                        # over (A, dy, dx)
+    idx, rem = flat // (w * w), flat % (w * w)
+    dy, dx = rem // w - s, rem % w - s
+    return {"index": idx.astype(np.int64), "dy": dy.astype(np.int64), "dx": dx.astype(np.int64),
+            "edge": (np.abs(dy) == s) | (np.abs(dx) == s) if s > 0 else np.zeros(len(idx), bool)}
 
 
 def angle_err_deg(a: np.ndarray, b: np.ndarray) -> np.ndarray:

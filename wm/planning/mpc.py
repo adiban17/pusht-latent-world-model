@@ -220,12 +220,14 @@ class PixelCEMPolicy(_CEMBase):
 
 def run_episode(env, start_state: np.ndarray, goal_frame: np.ndarray, goal_state: np.ndarray,
                 policy: Policy, budget: int = 40, gen: torch.Generator | None = None,
-                keep_frames: bool = False, keep_plans: bool = False) -> dict[str, Any]:
+                keep_frames: bool = False, keep_plans: bool = False,
+                keep_last_plan: bool = False) -> dict[str, Any]:
     """reset_to_state(start); loop act -> step -> check is_success; stop at the first success.
 
     Returns success, pos_success (block CoG < 20 px after any step), steps, start / final / min
-    errors, per-step best imagined cost and terminal cost (CEM), policy and env seconds, and
-    optionally the real frames and the imagined plan latents.
+    errors, the final state, per-step best imagined cost and terminal cost (CEM), policy and env
+    seconds, and optionally the real frames, the imagined plan latents of every step, or only
+    the last step's plan (`last_plan_z`, Phase 7 gallery).
     """
     from wm.envs.pusht import is_success
 
@@ -236,7 +238,7 @@ def run_episode(env, start_state: np.ndarray, goal_frame: np.ndarray, goal_state
     hist = History(render64(obs["pixels"]), s[:2])
     start_pos, start_ang = pose_error(s, goal_state)
     policy.reset(goal_frame, gen)
-    costs, terminal, plans = [], [], []
+    costs, terminal, plans, last_plan = [], [], [], None
     success, pos_success, min_pos, steps = False, False, start_pos, 0
     pos, ang = start_pos, start_ang
     t_policy = t_env = 0.0
@@ -255,6 +257,8 @@ def run_episode(env, start_state: np.ndarray, goal_frame: np.ndarray, goal_state
             terminal.append(info["terminal_cost"])
             if keep_plans:
                 plans.append(info["plan_z"])
+            if keep_last_plan:
+                last_plan = info["plan_z"]
         pos, ang = pose_error(s, goal_state)
         min_pos = min(min_pos, pos)
         pos_success = pos_success or pos < SUCCESS_POS_PX
@@ -264,10 +268,13 @@ def run_episode(env, start_state: np.ndarray, goal_frame: np.ndarray, goal_state
     out = {"success": success, "pos_success": bool(pos_success), "steps": steps,
            "start_pos_px": float(start_pos), "start_ang_deg": float(start_ang),
            "final_pos_px": float(pos), "final_ang_deg": float(ang), "min_pos_px": float(min_pos),
+           "final_state": [float(x) for x in s], "final_frame": hist.frames[-1],
            "costs": costs, "terminal_costs": terminal,
            "policy_s": t_policy, "env_s": t_env, "seconds": t_policy + t_env}
     if keep_frames:
         out["frames"] = np.stack(hist.frames)
     if keep_plans:
         out["plans"] = plans
+    if keep_last_plan:
+        out["last_plan_z"] = last_plan
     return out

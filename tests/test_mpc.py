@@ -59,6 +59,9 @@ def test_cem_proprio_episode_runs(env_state):
     assert ep["frames"].shape == (4, 64, 64, 3)
     assert ep["plans"][0].shape == (3, 256)
     assert all(np.isfinite(ep["costs"]))
+    ep2 = run_episode(env, s, f, goal, CEMPolicy(wm, SMALL, "cpu"), budget=3, keep_last_plan=True)
+    assert len(ep2["final_state"]) == 5 and ep2["last_plan_z"].shape == (3, 256)   # Phase 7
+    assert "plans" not in ep2 and "last_plan_z" not in ep
 
 
 def test_cem_non_proprio_and_pixel_policies(env_state):

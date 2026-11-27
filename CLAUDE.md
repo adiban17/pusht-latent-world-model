@@ -19,7 +19,7 @@ All models train on the same 20,000 transitions.
 2. **The local machine is an M1 Mac. CPU only. Never use MPS.** Device = `cuda` if available, else `cpu`. Locally, every job runs in smoke mode only; `run.py --mode full` must refuse to run on the local platform (except `make_report`).
 3. **Real runs happen on Kaggle (fallback: Colab), T4 GPU,** through the single runner notebook and `run.py` (see §10). The notebook's code never changes between phases; only `JOB`, `MODE` and `EXTRA` in cell 2 change.
 4. **Never push.** Commit after each phase (and each fix) with a clear message; Aditya pushes with GitHub Desktop.
-5. **Reproducibility:** seed python/numpy/torch; save `config.yaml`, git short hash (+ dirty flag), parameter counts and wall-clock time with every checkpoint and every results JSON.
+5. **Reproducibility:** seed python/numpy/torch; save `config.yaml`, git short hash (+ dirty flag; changes under `results/` and `outputs/` don't count), parameter counts and wall-clock time with every checkpoint and every results JSON.
 6. **Plain PyTorch.** No Lightning, no Hydra. Type hints, short docstrings, small files. Clarity over cleverness; this code will be explained in an interview.
 7. **Tests:** every phase adds CPU tests under `tests/` (pytest). Run them before every commit.
 8. **Headless rendering:** `os.environ.setdefault("SDL_VIDEODRIVER", "dummy")` before anything imports pygame.
@@ -61,7 +61,8 @@ pusht-latent-world-model/
 │   ├── eval/make_pairs.py       # eval_pairs_{val,test}.json
 │   ├── eval/rollouts.py         # NMSE / probe / pixel-MSE curves
 │   ├── eval/angle_audit.py  judges.py   # Phase 5b: angle conventions, template oracle; judge errors
-│   ├── eval/planning.py         # success, Wilson CI, McNemar, failure tags
+│   ├── eval/planning.py         # success, Wilson CI, BC / sweep selection rules, tau
+│   ├── eval/stats.py  final.py  final_summary.py   # Phase 7: McNemar, Holm, bootstraps; tags, bins, tests; summary.md
 │   ├── jobs/                    # one module per job in jobs.yaml
 │   └── viz/                     # GIFs, filmstrips, plots
 ├── scripts/make_readme_tables.py
@@ -198,7 +199,12 @@ Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decode
 - Job `plan_val`: all methods, 50 val pairs, 1 seed (smoke: 3 pairs, budget 10). Also a full-size timing probe per CEM method (projected s/episode) and the val-calibrated imagined-success threshold τ (95th percentile of ‖E_wm(o_i) − E_wm(o_j)‖² over same-val-episode frame pairs whose states satisfy `is_success`; imagined success = terminal ‖ẑ_H − z_g‖² < τ), used by Phase 7's failure tags.
 - Job `plan_cost_ablation` (Phase 6b, pre-registered in PROGRESS.md): cem_wm with cost_space latent vs pixel on the 50 val pairs (frozen plan.yaml settings), each arm with its own imagined-success threshold (τ, τ_pixel), the median final angle over position-reached episodes, a reproduction check of the latent arm against plan_val's cem_wm (WARN) and the decision: pixel joins Phase 7 as "post-hoc diagnostic, chosen on val" only with ≥ 3 more successes than latent; the latent default stays the headline.
 - Job `plan_sweep`: val pairs only; from the default, vary one at a time: N ∈ {32, 64, 128, 256}, rounds ∈ {1, 2, 4}, H ∈ {5, 10, 15}, β ∈ {0, 0.1}; `cem_wm` only. REPORT: table of success vs setting. **Freeze rule (pre-registered):** a variant replaces the default only with ≥ 3 more successes (of 50); several → the most, ties → the cheaper N × rounds × H; if every setting has ≤ 2 successes the rule runs on position-only success. The selected values go into `plan.yaml` (`frozen: true`) for every CEM method.
-- Job `final_eval` (Phase 7): uses the frozen config; `plan_test` = all methods × 200 test pairs × 3 planner seeds, each pair used exactly once per method and seed; McNemar exact test `cem_wm` vs `bc` (`scipy.stats.binomtest` on discordant pairs), per seed and pooled; goal-distance sweep (offsets 10/20/30, `cem_wm` and `bc`, 100 pairs each, 1 seed); failure tags for each failed `cem_wm` episode — `model_error` (best imagined cost fell below the val-calibrated "imagined success" threshold, real outcome failed), `search_error` (never below it), `contact_switch` (the needed push direction changes by > 90° during the episode), `rotation_heavy` (|Δθ| ≥ 30° and Δpos < 30 px); a gallery of 6 failed episodes (real frames beside the decoded imagined plan); finally `results_bundle.zip` with every results JSON, plot and gallery image, saved to the output dir and the store.
+- Job `final_eval` (Phase 7; pre-registered in PROGRESS.md, settings in `configs/final_eval.yaml`, CEM settings from the frozen plan.yaml): cem_wm, cem_wm_1step, cem_pixel, `bc_selected` (read from `results-plan-val`), random, noop × 200 test pairs × planner seeds 0, 1, 2 (cem_pixel: seed 0 only), each pair used exactly once per method and seed.
+  - Per method: success and position-only success (Wilson per seed; pooled over seeds with a pair-clustered bootstrap CI); turning / non-turning groups (low-power flag); medians; angle once position is reached; imagined vs real with τ per encoder (τ_wm for cem_wm and cem_pixel, τ_wm1step for cem_wm_1step); s/episode and s per planning call.
+  - **Primary tests:** cem_wm vs bc_selected, cem_wm_1step and cem_pixel on success and position-only success: exact McNemar on seed 0 (`scipy.stats.binomtest` on discordant pairs), Holm over the 6, paired bootstrap over pairs of the per-pair mean over each method's seeds. Everything else is secondary.
+  - **Secondary:** success per difficulty bin (move_px, |turn_deg|); failure tags from the final state (`success` / `position_only` / `angle_only` / `both_failed`) plus the CEM flag `believed_success_failed` (= `model_error`; failed without it = `search_error`); a seeded gallery (cem_wm and bc_selected, ≤ 4 per tag: start | goal | final | decoded imagined terminal frame); an exploratory goal-distance sweep (offsets 10 / 30, cem_wm and bc_selected, ≤ 100 pairs each, seed 0). `contact_switch` / `rotation_heavy` were dropped (the turn bins cover rotation).
+  - Crash safety: cheap arms first, cem_pixel last, `partial_final_eval.json` after every (method, seed). Outputs: `final_eval.json`, `summary.md` (generated from the JSONs only; `scripts/make_final_summary.py` regenerates it), plots, gallery and `results_bundle.zip` (final files + every earlier results file under `all_results/`), saved to the output dir and the store; full mode copies them to `results/final/`.
+- Job `eval_imagined_angle` (Phase 7): the non-learned template oracle on imagined frames (wm and wm_1step decoded, pixel predicted, copy_last) and floors (real, wm_recon), at k = 1, 5, 10, on eval_rollouts' 500 test windows. Primary reader = search over shifts ≤ ±4 image px; secondary = true position only; reference = copy_last's exact |θ_t − θ_{t+k}|. Paired bootstrap CIs and the pre-registered verdict on "imagined rollouts lose the angle".
 - **Tuning discipline:** only `plan_val`/`plan_sweep` touch val pairs; only `final_eval` touches test pairs; nothing is tuned after `final_eval`.
 
 **Stretch (only if asked):** context C = 1 ablation, pixel baseline with 10-step rollout loss, 2 extra training seeds for `wm` and `bc`.
@@ -241,7 +247,9 @@ Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decode
 | `plan_sweep` | 6 | data + `eval-pairs`, `ckpt-wm` | `results-plan-sweep` |
 | `plan_cost_ablation` | 6b | data + `eval-pairs`, `ckpt-wm`, `results-plan-val` | `results-plan-cost-ablation` |
 | `phase6` (group) | 6 | as its members | `make_pairs` → `train_bc_clean` → `plan_val` → `plan_sweep` |
-| `final_eval` | 7 | everything above | `results-final`, `results-bundle` |
+| `eval_imagined_angle` | 7 | data + `ckpt-wm`, `ckpt-wm-1step`, `ckpt-pixel` | `results-imagined-angle` |
+| `final_eval` | 7 | data + `eval-pairs`, `ckpt-wm`, `ckpt-wm-1step`, `ckpt-pixel`, `ckpt-bc`, `ckpt-bc-clean`, `results-plan-val` | `results-final`, `results-bundle` |
+| `phase7` (group) | 7 | as its members | `eval_imagined_angle` → `final_eval` |
 | `make_report` | 8 | local `results/` | README |
 
 `env_check` checks: platform, Python/torch versions, device and GPU name, a 64×64 render saved as `frame.png`, reset_to_state round trip, store push→pull round trip, a 2048×2048 matmul timing.
@@ -306,7 +314,7 @@ EXTRA = ""          # leave empty unless told otherwise (e.g. "--force")
 | 4 Baselines | §4 (1-step), §5, §6, §7 | `run.py --job train_baselines --mode smoke` | smoke tests pass; pixel params within ±20% |
 | 5 Rollout eval | §9 Rollouts | `run.py --job eval_rollouts --mode smoke` | JSON, plots, filmstrips produced |
 | 6 Planner | §8, §9 Pairs/Planning | `run.py --job plan_val --mode smoke` | CEM toy-quadratic test passes; one CPU episode runs end to end |
-| 7 Final eval | §9 `final_eval` | `run.py --job final_eval --mode smoke` | smoke bundle contains all tables with CIs and McNemar fields |
+| 7 Final eval | §9 `final_eval`, `eval_imagined_angle` | `run.py --job phase7 --mode smoke` | smoke bundle contains all tables with CIs and McNemar fields |
 | 8 Report | `make_report`, README | `run.py --job make_report` | every README number traces to a JSON file |
 
 After each phase: tests pass, PROGRESS.md updated, commit, then a two-line status for Aditya (what works, what he does next).

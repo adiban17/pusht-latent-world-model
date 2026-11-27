@@ -1,0 +1,36 @@
+# Final evaluation (CLAUDE.md §9 final_eval; Phase 7, pre-registered in PROGRESS.md). Test pairs only.
+# CEM settings, budget, random sigma, pixel AMP and tau calibration come from the frozen configs/plan.yaml
+# (never changed here); plan.yaml's hash reaches this job through results-plan-val (a need).
+plan_config: configs/plan.yaml
+seeds: [0, 1, 2]          # planner seeds; episode generator = seed * 100003 + pair index
+pixel_seeds: [0]          # cem_pixel: seed 0 only (pre-registered in Phase 6, compute)
+# run order: cheap arms first, cem_pixel last; a partial JSON is written after every (method, seed)
+order: [noop, random, bc_selected, cem_wm, cem_wm_1step, sweep, cem_pixel]
+comparisons:              # the 6 primary tests = these 3 x {success, position-only success}
+  - [cem_wm, bc_selected]
+  - [cem_wm, cem_wm_1step]
+  - [cem_wm, cem_pixel]
+alpha: 0.05               # Holm-adjusted McNemar p < alpha -> claim
+bootstrap: 10000          # pair resamples (pooled rates, paired differences)
+bootstrap_seed: 0
+bins:                     # fixed from the test-pair distribution (no outcomes seen); null = open-ended
+  move_px: [0, 45, 70, 95, null]
+  turn_deg: [0, 20, 40, 60, 180]
+gallery:
+  methods: [cem_wm, bc_selected]
+  per_tag: 4
+  seed: 0
+sweep:                    # exploratory goal-distance sweep (offset 20 = the main run)
+  offsets: [10, 30]
+  methods: [cem_wm, bc_selected]
+  n_pairs: 100            # per offset; all candidates if fewer
+  seed: 0                 # pair subset and planner seed
+timing_calls: 3
+smoke:
+  pairs: 3
+  budget: 10
+  seeds: [0, 1]
+  sweep_pairs: 3
+  bootstrap: 500
+  timing_calls: 1
+  tau_max_pairs: 2000

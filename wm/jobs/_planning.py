@@ -35,13 +35,14 @@ def episode_gen(seed: int, i: int) -> torch.Generator:
 
 
 def run_method(env, policy: Policy, pairs: list[dict[str, Any]], frames: np.ndarray, budget: int,
-               seed: int, keep: int = 0) -> list[dict[str, Any]]:
-    """Run one policy on every pair (in order); the first `keep` episodes keep frames and plans."""
+               seed: int, keep: int = 0, keep_last_plan: bool = False) -> list[dict[str, Any]]:
+    """Run one policy on every pair (in order); the first `keep` episodes keep frames and plans;
+    `keep_last_plan` keeps every episode's last plan latents (Phase 7 gallery)."""
     t0, out = time.time(), []
     for i, p in enumerate(pairs):
         out.append(run_episode(env, np.array(p["start_state"], np.float32), frames[p["goal_idx"]],
                                np.array(p["goal_state"], np.float32), policy, budget, episode_gen(seed, i),
-                               keep_frames=i < keep, keep_plans=i < keep))
+                               keep_frames=i < keep, keep_plans=i < keep, keep_last_plan=keep_last_plan))
     k = sum(e["success"] for e in out)
     kp = sum(e["pos_success"] for e in out)
     print(f"{policy.name}: success {k}/{len(out)}, position-only {kp}/{len(out)} "

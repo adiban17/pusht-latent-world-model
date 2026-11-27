@@ -15,7 +15,7 @@ def test_registry_well_formed():
         "env_check", "collect_data", "train_wm", "diagnose_wm", "wm_ablate", "train_wm_1step", "train_pixel", "train_bc",
         "train_probe", "eval_rollouts", "plan_val", "plan_sweep", "final_eval", "make_report",
         "angle_audit", "render_judge_data", "train_probe_mix", "train_latent_probe",
-        "make_pairs", "train_bc_clean", "plan_cost_ablation",
+        "make_pairs", "train_bc_clean", "plan_cost_ablation", "eval_imagined_angle",
     }
     for name, entry in reg["jobs"].items():
         assert set(entry) == {"phase", "module", "config", "needs", "makes"}, name
@@ -63,8 +63,8 @@ def test_unknown_job(capsys):
 
 
 def test_unbuilt_job(capsys):
-    assert run.main(["--job", "final_eval"]) == 2
-    assert "not built yet (Phase 7)" in capsys.readouterr().out
+    assert run.main(["--job", "make_report"]) == 2
+    assert "not built yet (Phase 8)" in capsys.readouterr().out
 
 
 def test_collect_data_smoke_then_skip(capsys, isolated_dirs):

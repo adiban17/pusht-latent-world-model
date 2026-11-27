@@ -1,0 +1,11 @@
+# Imagined-angle audit (Phase 7, pre-registered in PROGRESS.md): the non-learned template oracle on
+# imagined frames. Windows, seed, bootstrap, CI and chunk come from configs/rollouts.yaml, so the
+# job uses exactly eval_rollouts' 500 test windows and bootstrap resamples.
+rollouts_config: configs/rollouts.yaml
+ks: [1, 5, 10]
+step_deg: 5.0            # candidate angles every 5 deg from -180
+search_px: 4             # primary (search) oracle: every integer shift |dy|, |dx| <= 4 image px (32 world px)
+verdict_k: 10
+real_floor_deg: 5.0      # instrument check: search oracle on real o_{t+k} (FAIL in full, WARN in smoke)
+edge_warn_share: 0.10    # WARN if a row's search hits the shift limit in > 10% of windows at verdict_k
+# window count (500; smoke 20) comes from rollouts.yaml too

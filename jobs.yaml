@@ -119,11 +119,17 @@ jobs:
     config: configs/plan_cost_ablation.yaml
     needs: [pusht-data, eval-pairs, ckpt-wm, results-plan-val]
     makes: [results-plan-cost-ablation]
-  final_eval:
+  eval_imagined_angle:  # Phase 7: template oracle on imagined frames (same 500 test windows as eval_rollouts)
+    phase: 7
+    module: wm.jobs.eval_imagined_angle
+    config: configs/imagined_angle.yaml
+    needs: [pusht-data, ckpt-wm, ckpt-wm-1step, ckpt-pixel]
+    makes: [results-imagined-angle]
+  final_eval:           # Phase 7: all methods x 200 test pairs x seeds; frozen plan.yaml (via results-plan-val)
     phase: 7
     module: wm.jobs.final_eval
-    config: configs/plan.yaml
-    needs: [pusht-data, ckpt-wm, ckpt-wm-1step, ckpt-pixel, ckpt-bc, ckpt-probe]
+    config: configs/final_eval.yaml
+    needs: [pusht-data, eval-pairs, ckpt-wm, ckpt-wm-1step, ckpt-pixel, ckpt-bc, ckpt-bc-clean, results-plan-val]
     makes: [results-final, results-bundle]
   make_report:
     phase: 8
@@ -145,6 +151,9 @@ groups:
   phase6:               # pairs -> clean-action BC -> validation planning -> CEM sweep
     phase: 6
     jobs: [make_pairs, train_bc_clean, plan_val, plan_sweep]
+  phase7:               # imagined-angle audit -> final test evaluation (+ summary.md, results bundle)
+    phase: 7
+    jobs: [eval_imagined_angle, final_eval]
   overnight:            # one long Kaggle session: the world model, its diagnosis, then the baselines
     phase: 4            # (a member that is a group is expanded in place)
     jobs: [train_wm, diagnose_wm, train_baselines]

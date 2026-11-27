@@ -1,6 +1,6 @@
 # PROGRESS
 
-**Current phase: 6b DONE (cost-space null: pixel cost 13/50 = latent 13/50, does not join Phase 7) → 7 (final evaluation, pre-registered below).**
+**Current phase: 6b DONE (cost-space null: pixel cost 13/50 = latent 13/50, does not join Phase 7) → 7 built (pre-registered below); local `phase7` smoke passes.** Next: Aditya pushes, then runs `phase7` on Kaggle (smoke → full) and drops the contents of `results_bundle.zip` (except `all_results/`, already in the repo) into `results/final/`.
 
 ## Status
 | Phase | Status | Local smoke | Kaggle smoke | Kaggle full |
@@ -14,7 +14,7 @@
 | 5b Angle audit + judges | **DONE** (judges frozen, see Decisions) | PASS | PASS | PASS (`results/angle_audit.json`, `results/rollouts.json`) |
 | 6 Planner | **DONE** (frozen: default; bc_selected = bc_clean) | PASS | PASS | PASS (`results/plan_val.json`, `results/plan_sweep.json`) |
 | 6b Cost-space diagnostic | **DONE** (null: pixel does not join Phase 7) | PASS | PASS | PASS (`results/plan_cost_ablation.json`) |
-| 7 Final eval | not started | – | – | – |
+| 7 Final eval | built (`phase7` = eval_imagined_angle → final_eval); local smoke PASS | PASS | pending | pending |
 | 8 Report | not started | – | – | – |
 
 ## Decisions
@@ -235,11 +235,69 @@
   - Local smoke runs cem_pixel's episodes at N 16 / 2 rounds (CPU: a full-size call takes ~29 s); its timing probe is always full size. The Kaggle smoke runs everything full size.
   - plan_val saves 3 filmstrips (real frames 1..H | decoded imagined plan of the first step | goal) of the first cem_wm val episodes.
 
-## Phase 7 TODO
-- **BC arm = bc_clean** (`bc_selected` in `results/plan_val.json`); cost_space = pixel does **not** join (Phase 6b null).
-- **Seeds (pre-registered in Phase 6):** `final_eval` runs cem_pixel with planner seed 0 only; all other methods with 3 seeds.
-- (a) **Template-oracle angle on imagined frames:** a column with the template oracle (non-learned, true position given) on *imagined* frames for wm (decoded ẑ), wm_1step, pixel and copy_last at k = 1, 5, 10, to confirm or refute the learned judges' "wm imagined angle worse than copy_last" finding with the only trusted angle reader.
-- (b) **"-dirty" on Kaggle:** full-mode jobs write `results/*.json` into the checkout, so later jobs in the same session report git "-dirty" (e.g. `rollouts.json` shows 0382f7a-dirty). Exclude `results/` from the dirty check in `wm/repro.git_info`.
+## Phase 7 pre-registration (2026-11-27, by Aditya, written and committed BEFORE any Phase 7 run)
+Frozen configs and existing checkpoints only: no retraining, no tuning. Only `final_eval` reads test pairs. Nothing is tuned after it.
+
+**final_eval** (`configs/final_eval.yaml`; CEM settings, budget, random σ, pixel AMP and τ calibration from the frozen `configs/plan.yaml`)
+- **Setup:** the 200 test pairs (hash-matched `eval-pairs`), budget 40, CHECK `frozen: true`.
+- **Methods:** cem_wm, cem_wm_1step, cem_pixel, the BC arm `bc_selected` (read from `results-plan-val`; = bc_clean), random, noop. cost_space pixel does not join (Phase 6b).
+- **Seeds:** 0, 1, 2 for every method except cem_pixel (seed 0 only; pre-registered in Phase 6). Episode generator = seed × 100003 + pair index.
+- **Per method:**
+  - success and position-only success, Wilson CI per seed, and pooled over seeds with a pair-clustered bootstrap 95% CI (resample the 200 pairs, average over the seeds the method has; 10,000 resamples, seed 0). Position-only uses pairs starting ≥ 20 px away; all 200 test pairs qualify (min start error 20.7 px);
+  - turning (180 pairs) vs non-turning (20 pairs, flagged "low power"; < 30 pairs);
+  - median final pos px / angle °; angle once position is reached (n);
+  - imagined vs real; s/episode; s per full-size planning call.
+- **τ per encoder:** τ_wm for cem_wm and cem_pixel, τ_wm1step for cem_wm_1step. Both are calibrated on val frames as in plan_val (p95, same-episode success pairs). **Deviation, recorded:** plan_val scored cem_wm_1step's E_wm1step-space terminal costs against E_wm's τ, so its cem_wm_1step imagined counts (29 / 17) are not comparable.
+- **Primary tests (6):** cem_wm vs bc_selected, vs cem_wm_1step, vs cem_pixel; each on success and on position-only success.
+  - Exact McNemar on seed 0: `scipy.stats.binomtest(b, b + c, 0.5)`, two-sided; discordant counts reported.
+  - **Holm over the 6 p-values; a claim needs Holm p < 0.05.**
+  - Effect size: a paired bootstrap 95% CI over pairs of the difference in per-pair mean success, each method averaged over the seeds it has (10,000 resamples, seed 0).
+  - **Everything else is secondary/exploratory.**
+- **Difficulty bins** (fixed from the test-pair distribution; no outcomes seen). Success and position-only success per bin, every method, pooled (pair-clustered CI) + seed-0 Wilson:
+  - move_px [0, 45) / [45, 70) / [70, 95) / ≥ 95: test n = 43 / 56 / 47 / 54. All test pairs move ≥ 20.7 px, so the first bin is effectively [20, 45);
+  - |turn_deg| [0, 20) / [20, 40) / [40, 60) / [60, 180]: n = 20 / 74 / 46 / 60.
+- **Failure tags**, from the final state (a partition):
+  - `success`;
+  - `position_only` (final CoG < 20 px, |angle| ≥ 20°);
+  - `angle_only` (|angle| < 20°, CoG ≥ 20 px);
+  - `both_failed`;
+  - plus the CEM flag `believed_success_failed` (terminal cost < own-encoder τ at some step, but failed; = `model_error`; failed without it = `search_error`).
+  - `contact_switch` / `rotation_heavy` are dropped: the turn bins cover rotation.
+- **Gallery:** cem_wm and bc_selected, seed 0. Per tag, ≤ 4 episodes by `default_rng(0).choice` over that tag's pair indices, sorted. Columns: start | goal | final | (cem_wm) decoded terminal imagined frame of the last plan.
+- **Goal-distance sweep (exploratory):**
+  - cem_wm and bc_selected, seed 0, budget 40;
+  - offsets 10 and 30, using make_pairs' filter (≥ 30 px or ≥ 20°, starts 0..75 step 5) on the same test episodes, a seeded subset of 100 (all if fewer; n reported); median move / |turn| per offset. Offset 20 = the main run.
+- **Crash safety:** run order noop, random, bc_selected, cem_wm, cem_wm_1step, sweep, cem_pixel (last); `partial_final_eval.json` is rewritten after every (method, seed); no resume logic.
+
+**eval_imagined_angle** (`configs/imagined_angle.yaml`; windows, seed, bootstrap from `configs/rollouts.yaml`)
+- **Windows:** the same 500 test windows as eval_rollouts (`subset(..., seed 0)`, CHECK against `results-rollouts`' starts). Bootstrap = the same 1,000 resamples (seed 0).
+- **Rows** at k = 1, 5, 10, every frame clipped to [−0.5, 0.5]:
+  - real o_{t+k} and wm_recon (floors);
+  - wm (decoded ẑ), wm_1step (decoded), pixel (predicted);
+  - copy_last (o_t).
+- **Template oracle:** candidates every 5° at the true block CoG and pusher at t+k. They are rendered once per (window, k) and shared by all rows.
+  - **Primary = search reader:** the best (shift, angle) by SSE over every integer shift |dy|, |dx| ≤ 4 image px (±32 world px; wm's typical k = 10 position error is ~21 px), on the central 56×56 crop, applied identically to every row. It separates "is the orientation in the frame?" from position error.
+  - **Secondary = true-position reader:** shift 0, full frame (= `template_angle`).
+  - **Reference:** copy_last's exact |θ_t − θ_{t+k}|.
+  - Also reported: the oracle-found shift (world px, mean / median) and the share of windows hitting the ±4 px limit per row and k.
+- **Paired bootstrap CIs** (search, primary; true-position too): wm − copy_last, wm − wm_1step, wm − pixel, wm − wm_recon, wm − copy_last_exact at k = 1, 5, 10.
+- **Verdict on "imagined rollouts lose the angle"** at k = 10, search reader:
+  - A = CI of (wm − wm_recon) > 0;
+  - B = CI of (wm − copy_last) > 0 on the search row **and** CI of (wm search − copy_last exact) > 0. Both, because the ±32 px window around the true t+k position can miss copy_last's block, which sits at the t position;
+  - **confirmed** = A and B; **partial** = A only; **rejected** = not A.
+- **Instrument CHECKS:** search reader on real frames < 5° mean (FAIL in full, WARN in smoke); WARN for any row whose search-edge share at k = 10 is > 10%. summary.md prints the edge share next to every row.
+
+- **Phase 7 build (2026-11-27), implementation details (no results yet):**
+  - `wm/eval/angle_audit.py`: `template_candidates` + `template_match`. All 81 shifts are scored at once with `conv2d` in float64; `template_angle` is re-expressed through the candidates with output identical to the Phase 5b code (tested against a copy of it).
+  - `wm/eval/stats.py` (mcnemar_exact, holm, cluster_bootstrap_rate, paired_bootstrap_diff); `wm/eval/final.py` (tags, believed, bins, pooled summary, difficulty table, primary tests, verdict, gallery picks); `wm/eval/final_summary.py` (summary.md from the JSONs) + `scripts/make_final_summary.py`.
+  - `run_episode` also returns `final_state`, `final_frame` and (with `keep_last_plan`) `last_plan_z`. Nothing else changes and no hash moves (finished hashes asserted in `tests/test_registry_phase7.py`, incl. plan_cost_ablation 26e5d8dc66b3).
+  - `final_eval`'s config is `configs/final_eval.yaml`. plan.yaml is untouched, so plan_val / plan_sweep / plan_cost_ablation keep their hashes; plan.yaml reaches final_eval's hash through `results-plan-val`. final_eval reads `results-imagined-angle` for summary.md if it exists (otherwise `pending`). The bundle holds the final files at the top + every earlier `results/` file under `all_results/`.
+  - **Dirty flag (Phase 7 TODO (b), done):** `git_info` ignores `results/` and `outputs/` (`git status --porcelain -- . ':(exclude)results' ':(exclude)outputs'`).
+  - Local smoke (`phase7`, 3 pairs, budget 10, seeds [0, 1], 20 windows): GROUP OK in ~2.5 min. Smoke bc_selected = bc (the local plan_val smoke picked bc; full = bc_clean).
+- **T4 estimate (from Phase 6 Kaggle timings, not measured):**
+  - eval_imagined_angle ~5–8 min (1,500 × 72 renders);
+  - final_eval ~70 min: cem_wm + cem_wm_1step 600 episodes each ~17 min; cem_pixel 200 × ~11.8 s ~40 min; BC / random / noop ~5 min; sweep ~4 min; τ, timing, gallery, bundle ~3 min;
+  - **`phase7` full ~75–80 min.**
 
 ## Installed versions (local)
 python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, pygame 2.6.1, opencv-python(-headless) 4.14.0.94, numpy 2.5.5, wandb 0.31.2.
@@ -259,49 +317,127 @@ python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, py
 - **Phase 6 T4 estimates (from FLOP counts, not measured; the Kaggle smoke's timing lines replace them):** train_bc_clean ~15–30 min (as train_bc); plan_val without cem_pixel ~5–10 min; cem_pixel +10–30 min for 50 pairs; plan_sweep ~10–20 min; `phase6` full ~0.5–1.5 h.
 - **Mac only:** on import, macOS prints `objc ... Class SDL... is implemented in both cv2/.dylibs/libSDL2 and pygame/.dylibs/libSDL2` to stderr, because both OpenCV wheels bundle SDL2 on macOS. It's harmless with `SDL_VIDEODRIVER=dummy` and all tests pass. It doesn't occur on Kaggle/Colab (Linux).
 
-## Last REPORTs (local smoke, `plan_cost_ablation`; smoke numbers mean nothing)
-The Phase 6 local smoke REPORTs (`phase6` group) are in commit e3b8671's PROGRESS.md.
+## Last REPORTs (local smoke, `phase7` group; smoke numbers mean nothing)
+The Phase 6b local smoke REPORT (`plan_cost_ablation`) is in commit cc4aff0's PROGRESS.md.
 ```
 ==================== RUN REPORT ====================
-job: plan_cost_ablation   mode: smoke   platform: local   device: cpu
-git: 79c5429-dirty   time: 51.2s   params: wm 4,186,053
+job: eval_imagined_angle   mode: smoke   platform: local   device: cpu
+git: cc4aff0-dirty   time: 10.2s   params: wm 4,186,053 / wm_1step 4,186,053 / pixel 4,813,731
 CHECKS
  [PASS] ckpt_config_hash_wm: ckpt-wm-smoke step 50: d4c8e342b0d6 (== d4c8e342b0d6, current config; complete: true)
+ [PASS] ckpt_config_hash_wm_1step: ckpt-wm-1step-smoke step 50: dd5934291cbe (== dd5934291cbe, current config; complete: true)
+ [PASS] ckpt_config_hash_pixel: ckpt-pixel-smoke step 50: 2438d918b486 (== 2438d918b486, current config; complete: true)
+ [PASS] windows: 20 of 89 test windows (== 20)
+ [PASS] same_windows_as_eval_rollouts: results-rollouts-smoke: identical starts (identical window starts)
+ [PASS] real_frame_floor: search oracle on real o_t+k: 0.91 deg mean (< 5 deg (the instrument reads sharp frames); WARN only in smoke)
+ [PASS] search_edge_real: 0.0% of windows at k = 10 (<= 10% hit the +-4 px limit; WARN only)
+ [PASS] search_edge_wm_recon: 0.0% of windows at k = 10 (<= 10% hit the +-4 px limit; WARN only)
+ [PASS] search_edge_wm: 0.0% of windows at k = 10 (<= 10% hit the +-4 px limit; WARN only)
+ [PASS] search_edge_wm_1step: 0.0% of windows at k = 10 (<= 10% hit the +-4 px limit; WARN only)
+ [PASS] search_edge_pixel: 0.0% of windows at k = 10 (<= 10% hit the +-4 px limit; WARN only)
+ [PASS] search_edge_copy_last: 0.0% of windows at k = 10 (<= 10% hit the +-4 px limit; WARN only)
+ [PASS] metrics_finite: all finite (no NaN/inf)
+METRICS
+ ckpt_wm = ckpt-wm-smoke step 50, git 3c6f9a2-dirty, config_hash d4c8e342b0d6
+ ckpt_wm_1step = ckpt-wm-1step-smoke step 50, git 3c6f9a2-dirty, config_hash dd5934291cbe
+ ckpt_pixel = ckpt-pixel-smoke step 50, git 3c6f9a2-dirty, config_hash 2438d918b486
+ data = pusht-data-smoke
+ windows = 20 test windows (seed 0, as eval_rollouts); bootstrap 1000, 95% CI; candidates every 5 deg; search +-4 image px
+ angle_search_k1 = real 1.0 [0.7, 1.4] | wm_recon 76.3 [61.4, 93.3] | wm 80.8 [66.4, 97.0] | wm_1step 89.4 [75.5, 106.2] | pixel 2.2 [1.2, 3.4] | copy_last 2.3 [1.2, 3.5] | copy_last_exact 1.6 [0.7, 2.6]
+ angle_search_k5 = real 0.7 [0.5, 1.0] | wm_recon 69.5 [55.7, 84.7] | wm 66.5 [51.5, 82.5] | wm_1step 76.0 [64.3, 89.3] | pixel 20.5 [9.0, 34.1] | copy_last 31.9 [13.7, 51.1] | copy_last_exact 9.4 [5.4, 13.8]
+ angle_search_k10 = real 1.0 [0.7, 1.3] | wm_recon 61.4 [47.5, 77.0] | wm 43.0 [32.4, 53.7] | wm_1step 71.3 [58.2, 85.1] | pixel 65.8 [45.4, 86.4] | copy_last 32.9 [15.8, 53.8] | copy_last_exact 19.4 [12.3, 27.0]
+ angle_truepos_k1 = real 1.0 [0.7, 1.4] | wm_recon 77.5 [61.8, 94.9] | wm 81.2 [66.8, 96.9] | wm_1step 95.2 [79.8, 108.8] | pixel 2.3 [1.2, 3.5] | copy_last 2.3 [1.2, 3.5]
+ angle_truepos_k5 = real 0.7 [0.5, 1.0] | wm_recon 70.5 [57.1, 84.2] | wm 64.8 [53.2, 76.3] | wm_1step 74.2 [64.1, 84.4] | pixel 29.4 [13.0, 47.1] | copy_last 30.9 [13.6, 49.1]
+ angle_truepos_k10 = real 1.0 [0.7, 1.3] | wm_recon 72.7 [58.9, 85.9] | wm 46.4 [34.3, 59.3] | wm_1step 79.6 [66.7, 92.4] | pixel 48.9 [31.5, 66.9] | copy_last 33.2 [18.2, 49.9]
+ shift_px_k1 = real 0.0 (edge 0%) | wm_recon 11.1 (edge 0%) | wm 11.1 (edge 0%) | wm_1step 13.0 (edge 0%) | pixel 0.0 (edge 0%) | copy_last 0.0 (edge 0%)
+ shift_px_k5 = real 0.0 (edge 0%) | wm_recon 10.8 (edge 0%) | wm 10.8 (edge 0%) | wm_1step 11.8 (edge 0%) | pixel 3.9 (edge 0%) | copy_last 4.0 (edge 0%)
+ shift_px_k10 = real 0.0 (edge 0%) | wm_recon 11.0 (edge 0%) | wm 10.5 (edge 0%) | wm_1step 11.3 (edge 0%) | pixel 15.7 (edge 0%) | copy_last 3.5 (edge 0%)
+ search_wm_minus_copy_last = k1 +78.4 [+63.8, +94.7] | k5 +34.6 [+5.6, +61.6] | k10 +10.1 [-12.9, +31.4]
+ search_wm_minus_wm_1step = k1 -8.7 [-27.0, +5.2] | k5 -9.5 [-23.8, +4.5] | k10 -28.3 [-44.5, -14.1]
+ search_wm_minus_pixel = k1 +78.5 [+63.9, +94.9] | k5 +46.0 [+24.6, +65.0] | k10 -22.8 [-50.7, +4.8]
+ search_wm_minus_wm_recon = k1 +4.5 [+0.0, +13.5] | k5 -3.0 [-9.0, +0.0] | k10 -18.4 [-31.8, -7.2]
+ search_wm_minus_copy_last_exact = k1 +79.2 [+64.4, +95.8] | k5 +57.1 [+39.0, +76.2] | k10 +23.6 [+8.4, +39.0]
+ verdict = imagined rollouts lose the angle: rejected (k = 10; A rollout adds error False, B worse than copy_last False [search False, exact True])
+SAVED
+ outputs/eval_imagined_angle/artifact/imagined_angle.json
+ outputs/eval_imagined_angle/artifact/imagined_angle_vs_k.png
+ store/results-imagined-angle-smoke
+W&B: off
+====================================================
+==================== RUN REPORT ====================
+job: final_eval   mode: smoke   platform: local   device: cpu
+git: cc4aff0-dirty   time: 1m43s   params: wm 4,186,053 / wm_1step 4,186,053 / pixel 4,813,731 / bc 2,528,482
+CHECKS
+ [PASS] ckpt_config_hash_wm: ckpt-wm-smoke step 50: d4c8e342b0d6 (== d4c8e342b0d6, current config; complete: true)
+ [PASS] ckpt_config_hash_wm_1step: ckpt-wm-1step-smoke step 50: dd5934291cbe (== dd5934291cbe, current config; complete: true)
+ [PASS] ckpt_config_hash_pixel: ckpt-pixel-smoke step 50: 2438d918b486 (== 2438d918b486, current config; complete: true)
+ [PASS] ckpt_config_hash_bc: ckpt-bc-smoke step 50: dd9930d91fd0 (== dd9930d91fd0, current config; complete: true)
  [PASS] eval_pairs_hash: eval-pairs-smoke: 10a77495b6db (== 10a77495b6db (make_pairs current config))
  [PASS] plan_config_frozen: frozen: True (configs/plan.yaml frozen: true)
- [PASS] fg_mean_present: ckpt-wm has fg_mean (pixel cost needs the fg_weight mean frame)
- [PASS] pairs: 3 val pairs (train episode seed 1 (smoke: no val episodes)) (== 3)
- [PASS] all_arms_ran: cem_wm 3, cem_wm_pixelcost 3 (3 episodes each)
+ [PASS] bc_selected: bc (median final pos px: bc 91.0617 vs bc_clean 93.4133; results-plan-val-smoke (git 0382f7a-dirty)) (read from results-plan-val, checkpoint hash-matched)
+ [PASS] pairs: 3 test pairs (test episodes (pusht_test.npz)) (== 3)
+ [PASS] all_methods_ran: noop 2x3, random 2x3, bc 2x3, cem_wm 2x3, cem_wm_1step 2x3, cem_pixel 1x3 (every method x seed ran 3 pairs)
+ [PASS] seeds: noop 2 | random 2 | bc 2 | cem_wm 2 | cem_wm_1step 2 | cem_pixel 1 (2 seeds per method, cem_pixel [0])
+ [PASS] render_alignment_start: mean abs diff 0.000 (max 0.000) over 3 pairs (mean <= 0.5 uint8 levels)
+ [PASS] render_alignment_goal: mean abs diff 0.000 (max 0.000) over 3 pairs (mean <= 0.5 uint8 levels)
+ [PASS] noop_success_zero: 0/6 (== 0 (impossible by the pair filter))
  [PASS] metrics_finite: all finite (no NaN/inf)
- [PASS] latent_arm_reproduces_plan_val: 0/3 vs plan_val 0/3; 3/3 pairs agree (identical per-pair outcomes; WARN only)
+ [PASS] bundle: 26 files (results_bundle.zip has final_eval.json and summary.md)
+ [PASS] cem_wm_vs_random: 0.333 vs 0.000 pooled success (cem_wm > random; WARN only)
 METRICS
  ckpt_wm = ckpt-wm-smoke step 50, git 3c6f9a2-dirty, config_hash d4c8e342b0d6, proprio True
+ ckpt_wm_1step = ckpt-wm-1step-smoke step 50, git 3c6f9a2-dirty, config_hash dd5934291cbe, proprio True
+ ckpt_pixel = ckpt-pixel-smoke step 50, git 3c6f9a2-dirty, config_hash 2438d918b486
+ ckpt_bc = ckpt-bc-smoke step 50, git 3c6f9a2-dirty, config_hash dd9930d91fd0
  data = pusht-data-smoke
- setup = 3 val pairs (train episode seed 1 (smoke: no val episodes)); budget 10; seed 0; CEM N 128, H 10, rounds 4, K 12, beta 0.1 (frozen configs/plan.yaml); fp32
- success_cem_wm = 0/3 = 0.0% [0.0, 56.1]
- pos_success_cem_wm = 0/3 = 0.0% [0.0, 56.1] (start >= 20 px) | all pairs 0/3
- groups_cem_wm = rotation (3 pairs): success 0/3, position-only 0/3 | translation (0 pairs): success 0/0, position-only 0/0
- final_err_cem_wm = median pos 94.9 px / angle 60.0 deg; mean steps-to-success n/a; 0.46 s/episode
- angle_when_position_reached_cem_wm = median final angle n/a deg over 0 position-reached episodes; n/a deg over the 0 of them that failed (direct test of the angle-insensitivity hypothesis)
- timing_cem_wm = 0.047 s per full-size planning call (mean of 1)
- imagined_success_cem_wm = 0/3 episodes reached terminal distance < tau (15.38); 0 of them failed for real
- success_cem_wm_pixelcost = 0/3 = 0.0% [0.0, 56.1]
- pos_success_cem_wm_pixelcost = 0/3 = 0.0% [0.0, 56.1] (start >= 20 px) | all pairs 0/3
- groups_cem_wm_pixelcost = rotation (3 pairs): success 0/3, position-only 0/3 | translation (0 pairs): success 0/0, position-only 0/0
- final_err_cem_wm_pixelcost = median pos 86.6 px / angle 46.9 deg; mean steps-to-success n/a; 15.56 s/episode
- angle_when_position_reached_cem_wm_pixelcost = median final angle n/a deg over 0 position-reached episodes; n/a deg over the 0 of them that failed (direct test of the angle-insensitivity hypothesis)
- timing_cem_wm_pixelcost = 1.559 s per full-size planning call (mean of 1)
- imagined_success_cem_wm_pixelcost = 0/3 episodes reached terminal distance < tau (0.06457); 0 of them failed for real
- tau_latent = 15.383 = p95 over 721 same-episode val success pairs (median 1.522; non-success median 404.6) [train episode seed 1 (smoke: no val episodes)]
- tau_pixel = 0.064575 = p95 over 1442 same-episode val success pairs (median 0.05119; non-success median 0.09327) [train episode seed 1 (smoke: no val episodes)]
- pusher_mask_removed = mean 5.6% of fg-mask pixels removed over 3 goal frames (5.3% over the val frames)
- discordant = pixel-only successes 0, latent-only 0, same outcome 3/3
- reproduction = latent arm 0/3 vs results-plan-val-smoke (git 0382f7a-dirty) cem_wm 0/3; agree 3/3 (only ours 0, only plan_val 0)
- cost_ablation_decision = pixel 0 vs latent 0 successes (needs >= 3): does not join Phase 7
+ setup = 3 test pairs (eval-pairs-smoke): turning 3, non-turning 0; budget 10; seeds [0, 1] (cem_pixel [0]); bc_selected bc; CEM N 128, H 10, rounds 4 (frozen configs/plan.yaml)
+ success_noop = pooled 0.0% [0.0, 0.0] (2 seeds) | seed 0 0/3 | position-only pooled 0.0% [0.0, 0.0]
+ groups_noop = turning (3) 0.0% [0.0, 0.0] | non-turning (0, low power) n/a
+ final_err_noop = median pos 67.7 px / angle 62.9 deg; angle once position reached n/a deg (n 0); 0.01 s/episode
+ tags_noop = success 0 | position_only 0 | angle_only 0 | both_failed 6
+ success_random = pooled 0.0% [0.0, 0.0] (2 seeds) | seed 0 0/3 | position-only pooled 0.0% [0.0, 0.0]
+ groups_random = turning (3) 0.0% [0.0, 0.0] | non-turning (0, low power) n/a
+ final_err_random = median pos 58.8 px / angle 63.6 deg; angle once position reached n/a deg (n 0); 0.01 s/episode
+ tags_random = success 0 | position_only 0 | angle_only 1 | both_failed 5
+ success_bc = pooled 0.0% [0.0, 0.0] (2 seeds) | seed 0 0/3 | position-only pooled 0.0% [0.0, 0.0]
+ groups_bc = turning (3) 0.0% [0.0, 0.0] | non-turning (0, low power) n/a
+ final_err_bc = median pos 67.1 px / angle 62.5 deg; angle once position reached n/a deg (n 0); 0.04 s/episode
+ tags_bc = success 0 | position_only 0 | angle_only 0 | both_failed 6
+ success_cem_wm = pooled 33.3% [0.0, 100.0] (2 seeds) | seed 0 1/3 | position-only pooled 66.7% [15.8, 100.0]
+ groups_cem_wm = turning (3) 33.3% [0.0, 100.0] | non-turning (0, low power) n/a
+ final_err_cem_wm = median pos 23.2 px / angle 88.2 deg; angle once position reached 52.3 deg (n 4); 0.27 s/episode
+ tags_cem_wm = success 2 | position_only 0 | angle_only 0 | both_failed 4 | believed-but-failed 0 of 0 believed
+ success_cem_wm_1step = pooled 33.3% [0.0, 100.0] (2 seeds) | seed 0 1/3 | position-only pooled 83.3% [57.9, 100.0]
+ groups_cem_wm_1step = turning (3) 33.3% [0.0, 100.0] | non-turning (0, low power) n/a
+ final_err_cem_wm_1step = median pos 21.4 px / angle 83.4 deg; angle once position reached 83.4 deg (n 5); 0.27 s/episode
+ tags_cem_wm_1step = success 2 | position_only 0 | angle_only 0 | both_failed 4 | believed-but-failed 0 of 0 believed
+ success_cem_pixel = pooled 0.0% [0.0, 0.0] (1 seeds) | seed 0 0/3 | position-only pooled 0.0% [0.0, 0.0]
+ groups_cem_pixel = turning (3) 0.0% [0.0, 0.0] | non-turning (0, low power) n/a
+ final_err_cem_pixel = median pos 68.0 px / angle 63.2 deg; angle once position reached n/a deg (n 0); 21.88 s/episode
+ tags_cem_pixel = success 0 | position_only 0 | angle_only 0 | both_failed 3 | believed-but-failed 0 of 0 believed
+ test_cem_wm_vs_bc_success = discordant 1/0, McNemar p 1, Holm p 1 -> no claim (Holm p = 1); diff +33.3 pp [+0.0, +100.0]
+ test_cem_wm_vs_cem_wm_1step_success = discordant 0/0, McNemar p 1, Holm p 1 -> no claim (Holm p = 1); diff +0.0 pp [+0.0, +0.0]
+ test_cem_wm_vs_cem_pixel_success = discordant 1/0, McNemar p 1, Holm p 1 -> no claim (Holm p = 1); diff +33.3 pp [+0.0, +100.0]
+ test_cem_wm_vs_bc_pos_success = discordant 2/0, McNemar p 0.5, Holm p 1 -> no claim (Holm p = 1); diff +66.7 pp [+15.8, +100.0]
+ test_cem_wm_vs_cem_wm_1step_pos_success = discordant 0/1, McNemar p 1, Holm p 1 -> no claim (Holm p = 1); diff -16.7 pp [-42.1, +0.0]
+ test_cem_wm_vs_cem_pixel_pos_success = discordant 2/0, McNemar p 0.5, Holm p 1 -> no claim (Holm p = 1); diff +66.7 pp [+15.8, +100.0]
+ tau_wm = 15.383 (p95 over 721 val success pairs)
+ tau_wm_1step = 23.100 (p95 over 721 val success pairs)
+ timing_cem_wm = 0.040 s per full-size planning call (mean of 1)
+ timing_cem_wm_1step = 0.034 s per full-size planning call (mean of 1)
+ timing_cem_pixel = 29.486 s per full-size planning call (mean of 1)
+ sweep_offset10 = 3 pairs (of 7; median move 57.6 px, |turn| 38.5 deg): cem_wm 1/3 | bc 0/3
+ sweep_offset30 = 3 pairs (of 13; median move 126.6 px, |turn| 101.7 deg): cem_wm 0/3 | bc 0/3
+ imagined_angle = verdict rejected (from smoke imagined_angle.json)
 SAVED
- outputs/plan_cost_ablation/artifact/plan_cost_ablation.json
- outputs/plan_cost_ablation/artifact/goal_mask_debug.png
- store/results-plan-cost-ablation-smoke
+ outputs/final_eval/artifact/final_eval.json
+ outputs/final_eval/artifact/summary.md
+ outputs/final_eval/artifact/plots
+ outputs/final_eval/artifact/gallery
+ outputs/final_eval/partial_final_eval.json
+ outputs/final_eval/results_bundle.zip
+ store/results-final-smoke
+ store/results-bundle-smoke
 W&B: off
 ====================================================
 ```
