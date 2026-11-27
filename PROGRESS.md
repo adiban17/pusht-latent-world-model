@@ -1,6 +1,6 @@
 # PROGRESS
 
-**Current phase: 5 built locally → Kaggle.** `eval_rollouts` (rollout evaluation, §9) is built and its local smoke passes; its pre-registered decisions are below (Phase 5). Next: Aditya pushes, then runs Kaggle `eval_rollouts` smoke → full. It needs `ckpt-wm` (A+B), `ckpt-wm-1step`, `ckpt-pixel` and `ckpt-probe` complete at their current config hashes on W&B; if one is missing, the job FAILs and names it. After the full run, drop `results/rollouts.json` from the Kaggle output into `results/`. `ckpt-wm:v5` is the v1 model.
+**Current phase: 5b (angle audit and fair judges), being built.** Kaggle `eval_rollouts` full (adc200d) showed the v1 probe is a broken judge (findings below), so Phase 5b adds an angle audit, two new judges (`probe_mix` on images, a latent MLP on E_wm) and reruns `eval_rollouts` with both. Its judge decisions are pre-registered below.
 
 ## Status
 | Phase | Status | Local smoke | Kaggle smoke | Kaggle full |
@@ -10,7 +10,8 @@
 | 3 World model | v1 done (`ckpt-wm:v5`); A+B retrain in `overnight` | PASS | pending | pending (A+B) |
 | 3b WM fixes | **complete** (A+B adopted) | PASS | PASS | PASS |
 | 4 Baselines | done locally | PASS | pending | pending |
-| 5 Rollout eval | built; local smoke PASS | PASS | pending | pending |
+| 5 Rollout eval | Kaggle full done (adc200d); judge failed → 5b | PASS | PASS | PASS (`results/rollouts.json`) |
+| 5b Angle audit + judges | being built | – | – | – |
 | 6 Planner | not started | – | – | – |
 | 7 Final eval | not started | – | – | – |
 | 8 Report | not started | – | – | – |
@@ -114,6 +115,21 @@
   - **Outputs:** `rollouts.json`, 5 plots (metric vs k with CI bands; the probe-on-all-test-frames line on the probe plots; p̂ dashed on the pusher plot) and 6 filmstrips (real | wm | wm_1step | pixel, frames t..t+10). Pushed as `results-rollouts`; full mode also writes `results/rollouts.json` in the checkout.
 - **Eval skip rule (Phase 5):** a job whose `needs` include `ckpt-*` stores `inputs` = {checkpoint: its producer's current config_hash} in its results metadata. `run.is_finished` treats the results as unfinished if that no longer matches (e.g. after `wm.yaml` changes), so stale evals never skip. Training jobs are unaffected (they need no checkpoints). `wm.registry.input_hashes`; Phases 6–7 reuse it. Recorded in CLAUDE.md §10.
 - **Note for Phase 6 (not built):** with proprio, the planner's goal cost uses only the image latent z_g (the goal is an image), not the goal pusher position.
+- **Kaggle `eval_rollouts` full (Phase 5, commit adc200d; source `results/rollouts.json`, 500 test windows, checkpoints ckpt-wm/-1step/-pixel step 30000, ckpt-probe step 10000, all at current hashes):**
+  1. **The v1 probe is a broken judge for decoded frames.** On real test frames it reads the block well (all 3,030 frames: 10.7 px mean; row `real`: 10.1–10.8 px per k), but on `wm_recon` = D_wm(E_wm(real)) it gives 67.0–68.8 px, and pusher 104–116 px vs 22 px on real frames. So every probe number on wm and wm_1step frames (block 59–91 px) measures the judge, not the model. Probe rows on pixel frames (block 13.7 → 42.9 px at k = 1 → 10, copy-last 11.5 → 32.4) are less affected but also not trusted until a fair judge confirms them.
+  2. **Angle is unreadable by every judge so far.** Probe block angle on real test frames: mean 76.2°, median 68.9° (predict-mean 94.7°); the ridge probe on z gets 80–91° (`results/ablation_wm_fixes.json`). A CNN on sharp 64×64 frames should read a T's angle easily, so a label or measurement bug was suspected. **Read-only pre-check (2026-11-27):** re-rendering 40 stored smoke states with `reset_to_state` reproduces the stored frames exactly (mean abs diff 0.00; with −θ, θ+90° and θ+180° it is 3.3–4.5), so frames and angle labels agree. On reading, `state_targets`, `decode_targets` and `probe_errors` are correct. The probe's test loss of 0.254 (mean over 6 outputs) means its sin/cos MSE is about 0.75 per output, worse than predicting the mean (about 0.5): it is confidently wrong on held-out frames, which points to memorisation. Phase 5b's `angle_audit` checks this properly.
+  3. **Pre-registered NMSE headline (`wm_via_frames`), recorded as is:** at k = 10, wm_via_frames 0.122 [0.098, 0.150] vs pixel 0.084 [0.066, 0.104]. The reduction 1 − wm ÷ pixel is −0.454 [−0.900, −0.095]: **the pixel baseline is better** (at k = 5: −0.706 [−1.421, −0.249]). Against wm_1step, wm_via_frames is **60% lower** at k = 10 (0.600 [0.512, 0.676]; 0.305 vs 0.122) and 50% at k = 5 (0.504 [0.349, 0.619]). Direct-ẑ NMSE (secondary) at k = 10: 0.127. p̂ pusher error at k = 10: wm 2.4 px, wm_1step 11.0, copy-last 66.8.
+- **Phase 5b judge decision (pre-registered 2026-11-27 by Aditya, before any judge result):**
+  - **Judges are instruments.** Only the judges (`probe_mix`, the latent MLP) train on extra frames: the 20k-transition frames **plus about 50,000 frames rendered from random valid states** with `reset_to_state`. Block CoG is uniform in [85, 427]² (the T stays inside the walls), angle uniform in [−π, π), pusher not overlapping the block, round trip < 1 px. wm, wm_1step, pixel and bc are untouched and still see only the 20k transitions.
+  - **Rendered data** = 12,500 four-frame micro-episodes (random start state, then 3 random actions with target = p + N(0, 30²), clipped), seeds from 5000 up. They give the pixel model its 3 context frames + action, and the true next state labels its 1-step prediction. 10% of micro-episodes are a held-out rendered validation split for early stopping.
+  - **Training:** ±4 px random shift (replicate-pad + crop), with position labels shifted to match (8 px per 64-px pixel; angle unchanged); AdamW wd 1e-4; keep-best on rendered-val loss (`train_loop(select=...)`).
+  - **Architecture:** the §7 encoder first. Only if probe_mix's real-frame test angle is > 30° does the job also train a `coord_gap` variant (CoordConv x/y input channels + global average pooling in place of flatten→Linear) as a documented deviation. Both are reported; coord_gap becomes the judge if it passes acceptance.
+  - **probe_mix frame types** (1/4 of each batch, all labelled with the true state): real; D_wm(E_wm(x)); D_wm1step(E_wm1step(x)); pixel-model 1-step prediction (context o_{t−2..t} + a_t, labelled s_{t+1}; first frame repeated for t < 2). Derived frames are made on the fly and clipped to [−0.5, 0.5].
+  - **Acceptance (probe_mix, test):** real-frame angle < 15°; real-frame block ≤ 1.25 × the v1 probe's 10.7 px (≤ 13.4 px); block and pusher px on each derived type ≤ 1.5 × the real-frame error. Angle on derived types is reported but not gated (the autoencoder may truly lose angle; the template oracle separates that from a judge failure). A failed acceptance check is a WARN; the summary records `accepted`, and eval_rollouts marks the rows of an unaccepted judge.
+  - **Latent judge:** MLP 256→512→512→6 (SiLU, dropout 0.1) on E_wm(x) of the same real + rendered frames, keep-best on rendered val; reported on real E_wm(o) train / val / test.
+  - **Headline rule:** "wm beats X on block px at k" is claimed only if both judges agree in sign and both paired 95% CIs exclude 0; otherwise the README says the judges disagree.
+  - **Angle verdict:** latent-MLP mean angle error on real E_wm(o) test frames < 20° = **present** (rotation goals plausible), 20–45° = **weak**, > 45° = **absent** (Phase 6 must restrict or flag rotation goals). It is printed beside the template oracle and predict-mean.
+  - **No existing checkpoint retrains:** the training config_hash of train_wm, train_wm_1step, train_pixel, train_bc and train_probe stays unchanged (asserted in a test).
 
 ## Installed versions (local)
 python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, pygame 2.6.1, opencv-python(-headless) 4.14.0.94, numpy 2.5.5, wandb 0.31.2.
