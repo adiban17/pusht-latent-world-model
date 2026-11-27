@@ -64,7 +64,7 @@ def run_job_status(name: str, mode: str, force: bool, registry: dict[str, Any]) 
         raise
 
     cfg = load_job_config(entry)
-    chash = job_config_hash(name, entry, cfg)
+    chash = job_config_hash(name, entry, cfg, registry)
     store = make_store(platform, mode)
     if not force and is_finished(store, entry, chash, registry):
         print(f"{name}: already finished, skipping (use --force to rerun)")

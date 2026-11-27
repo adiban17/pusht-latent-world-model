@@ -1,4 +1,4 @@
-# Rollout evaluation (CLAUDE.md §9 Rollouts, Phase 5). Decisions pre-registered in PROGRESS.md.
+# Rollout evaluation (CLAUDE.md §9 Rollouts, Phase 5; judges Phase 5b). Decisions pre-registered in PROGRESS.md.
 seed: 0              # window subset, bootstrap resamples
 windows: 500         # 13-frame test windows (o[t-2..t+10], a[t-2..t+9]) from pusht_test.npz
 bootstrap: 1000      # resamples over windows (same indices for every method -> paired CIs)
@@ -6,6 +6,19 @@ ci: 0.95
 report_ks: [1, 5, 10]
 filmstrips: 6        # real | wm | wm_1step | pixel, frames t..t+10
 chunk: 64            # windows per forward pass
-probe_angle_floor_deg: 30.0   # WARN-only: the judge must read angle from real frames
+probe_angle_floor_deg: 30.0   # WARN-only: a judge must read angle from real frames
+judges:              # Phase 5b: two judges side by side; the v1 probe is kept as deprecated
+  image: probe_mix   # ckpt-probe-mix: image judge, rows on (clipped) predicted frames
+  latent: latent     # ckpt-latent-probe: MLP on wm latents; its `wm` row = direct z_hat
+  deprecated: probe_v1   # ckpt-probe: "deprecated (judge failure)"
+  headline_ks: [5, 10]   # headline rule: both judges agree in sign, both paired CIs exclude 0
+  angle_verdict:     # latent MLP mean angle on real E_wm(o) test frames
+    present_deg: 20.0
+    absent_deg: 45.0
+oracle_frames: 100   # template oracle on real test frames (angle reference)
+grid:                # rendered poses for the judges' grid angle score (before / after)
+  step_deg: 5.0
+  positions: [[192, 192], [320, 192], [192, 320], [320, 320]]
 smoke:
   windows: 20
+  oracle_frames: 10

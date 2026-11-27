@@ -63,8 +63,32 @@ jobs:
     phase: 5
     module: wm.jobs.eval_rollouts
     config: configs/rollouts.yaml
-    needs: [pusht-data, ckpt-wm, ckpt-wm-1step, ckpt-pixel, ckpt-probe]
+    needs: [pusht-data, ckpt-wm, ckpt-wm-1step, ckpt-pixel, ckpt-probe, ckpt-probe-mix, ckpt-latent-probe]
     makes: [results-rollouts]
+  angle_audit:          # Phase 5b, eval only: label/convention checks, template oracle, v1 probe errors
+    phase: 5
+    module: wm.jobs.angle_audit
+    config: configs/angle_audit.yaml
+    needs: [pusht-data, ckpt-probe, ckpt-wm, ckpt-wm-1step, ckpt-pixel]
+    makes: [results-angle-audit]
+  render_judge_data:    # Phase 5b: rendered micro-episodes for the judges only
+    phase: 5
+    module: wm.jobs.render_judge_data
+    config: configs/judge_data.yaml
+    needs: []
+    makes: [judge-data]
+  train_probe_mix:      # Phase 5b: fair image judge (real + decoded + pixel-predicted frames)
+    phase: 5
+    module: wm.jobs.train_probe_mix
+    config: configs/probe_mix.yaml
+    needs: [pusht-data, judge-data, ckpt-wm, ckpt-wm-1step, ckpt-pixel]
+    makes: [ckpt-probe-mix]
+  train_latent_probe:   # Phase 5b: latent judge (MLP on E_wm), answers "is angle in z?"
+    phase: 5
+    module: wm.jobs.train_latent_probe
+    config: configs/latent_probe.yaml
+    needs: [pusht-data, judge-data, ckpt-wm]
+    makes: [ckpt-latent-probe]
   plan_val:
     phase: 6
     module: wm.jobs.plan_val
@@ -97,6 +121,9 @@ groups:
   train_baselines:
     phase: 4
     jobs: [train_wm_1step, train_pixel, train_bc, train_probe]
+  phase5b:              # angle audit -> judge data -> both judges -> rollout eval with both judges
+    phase: 5
+    jobs: [angle_audit, render_judge_data, train_probe_mix, train_latent_probe, eval_rollouts]
   overnight:            # one long Kaggle session: the world model, its diagnosis, then the baselines
     phase: 4            # (a member that is a group is expanded in place)
     jobs: [train_wm, diagnose_wm, train_baselines]

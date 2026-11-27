@@ -9,7 +9,8 @@ import numpy as np
 # dataviz reference palette (blue, orange, aqua, yellow).
 COLORS = {"wm": "#2a78d6", "wm_via_frames": "#2a78d6", "wm_1step": "#eb6834", "pixel": "#1baf7a",
           "copy_last": "#eda100"}
-REF_STYLE = {"real": ("#52514c", "--"), "wm_recon": ("#8a897f", ":")}
+REF_STYLE = {"real": ("#52514c", "--"), "wm_recon": ("#8a897f", ":"), "wm1step_recon": ("#b0afa6", "-.")}
+LINE_STYLE = {"wm_via_frames": "--"}   # same colour as wm (latent judge: direct z_hat vs re-encoded frames)
 INK, MUTED, GRID = "#1f1e1c", "#6b6a63", "#e6e5e0"
 
 
@@ -37,7 +38,7 @@ def metric_vs_k(series: dict[str, dict[str, list[float]]], title: str, ylabel: s
         ax.plot(k, s["mean"], style, color=color, linewidth=2, marker="o", markersize=4, label=label)
 
     for row, s in series.items():
-        color, style = REF_STYLE.get(row, (COLORS.get(row, MUTED), "-"))
+        color, style = REF_STYLE.get(row, (COLORS.get(row, MUTED), LINE_STYLE.get(row, "-")))
         draw(row, s, color, style)
     for row, s in (dashed or {}).items():
         draw(row, s, COLORS.get(row.split(" ")[0], MUTED), "--")

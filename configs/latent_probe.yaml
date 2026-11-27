@@ -1,0 +1,45 @@
+# Latent judge (Phase 5b; pre-registered judge decision in PROGRESS.md): MLP on z = E_wm(frame).
+seed: 0
+model:
+  latent_dim: 256
+  hidden: 512
+  dropout: 0.1
+val_seeds: [190, 199]      # real val episodes (excluded from training; reported)
+train:
+  batch_size: 512
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  warmup_steps: 500
+  steps: 10000
+  grad_clip: 1.0
+  amp: false
+  val_every: 500           # keep-best on the rendered-val loss
+  ckpt_every: 5000
+  log_every: 100
+val:
+  seeds: [190, 199]
+  windows: 5000            # rendered-val latents (all of them if fewer)
+  seed: 0
+verdict:                   # angle in the wm latent (mean error on real E_wm(o) test frames)
+  present_deg: 20.0
+  absent_deg: 45.0
+grid:
+  step_deg: 5.0
+  positions: [[192, 192], [320, 192], [192, 320], [320, 320]]
+smoke:
+  local:
+    batch_size: 64
+    steps: 50
+    warmup_steps: 5
+    val_every: 25
+    ckpt_every: 25
+    log_every: 10
+    val_windows: 64
+  remote:
+    batch_size: 512
+    steps: 300
+    warmup_steps: 30
+    val_every: 100
+    ckpt_every: 150
+    log_every: 25
+    val_windows: 5000

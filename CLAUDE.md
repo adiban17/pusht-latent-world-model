@@ -49,16 +49,18 @@ pusht-latent-world-model/
 │   ├── data/expert.py           # ScriptedPusher
 │   ├── data/collect.py          # episodes -> npz, health report, GIFs, filmstrips
 │   ├── data/windows.py          # GPU-resident window sampler (WM, pixel) + goal sampler (BC)
+│   ├── data/judge_render.py  judge_mix.py   # Phase 5b: rendered judge frames; typed frames for probe_mix
 │   ├── models/encoder.py  decoder.py  dynamics.py  world_model.py
 │   ├── models/pixel_unet.py
 │   ├── models/bc.py
-│   ├── models/probe.py
+│   ├── models/probe.py  latent_probe.py   # image judge (flatten | coord_gap); latent judge MLP
 │   ├── planning/cem.py          # batched CEM planner
 │   ├── planning/mpc.py          # run_episode(...) closed-loop runner + policies
 │   ├── train/common.py          # optimiser, schedule, AMP, checkpoint/resume, logging
 │   ├── train/train_wm.py  train_pixel.py  train_bc.py  train_probe.py
 │   ├── eval/make_pairs.py       # eval_pairs_{val,test}.json
 │   ├── eval/rollouts.py         # NMSE / probe / pixel-MSE curves
+│   ├── eval/angle_audit.py  judges.py   # Phase 5b: angle conventions, template oracle; judge errors
 │   ├── eval/planning.py         # success, Wilson CI, McNemar, failure tags
 │   ├── jobs/                    # one module per job in jobs.yaml
 │   └── viz/                     # GIFs, filmstrips, plots
@@ -152,6 +154,12 @@ Same encoder design → Linear 256→6: pusher (x, y), block (x, y) normalised, 
 
 Job group `train_baselines` = `train_wm_1step`, `train_pixel`, `train_bc`, `train_probe`, in that order, each skipped if already complete.
 
+**Phase 5b judges (pre-registered 2026-11-27; details in PROGRESS.md).** The v1 probe above failed as a judge: it memorises angle (76° on real test frames) and cannot read decoded frames (67 px on D_wm(E_wm(real))). It stays as `probe_v1`, "deprecated (judge failure)". Two judges replace it; they are instruments, not compared models:
+- **Rendered judge data (`render_judge_data` → `judge-data`):** 12,500 four-frame micro-episodes (seeds 5000+) from random valid states via `reset_to_state` (block CoG uniform in [85, 427]², angle uniform, pusher ≥ 2 px clear of the T, checked geometrically), then 3 random actions (p + N(0, 30²)). 10% are a validation split. **Only the judges train on these;** wm, wm_1step, pixel and bc see only the 20k transitions.
+- **`probe_mix` (`train_probe_mix` → `ckpt-probe-mix`):** the §7 probe trained on real train-split + rendered frames in four equal-share types, all labelled with the true state: real, clip(D_wm(E_wm(x))), clip(D_wm1step(E_wm1step(x))), pixel-model 1-step prediction (labelled s_{t+1}). ±4 px shifts with matching label shifts, keep-best on rendered-val loss, 20,000 steps. Fallback: only if real-frame test angle > 30°, a `coord_gap` variant (CoordConv + global average pooling, 692,710 params) is also trained and used if it passes acceptance. Acceptance (test, WARN-only): real angle < 15°, real block ≤ 13.4 px, block and pusher px of each derived type ≤ 1.5 × real's.
+- **Latent judge (`train_latent_probe` → `ckpt-latent-probe`):** MLP 256→512→512→6 (SiLU, dropout 0.1; 397,318 params) on E_wm of the same frames, keep-best on rendered val. Its mean angle error on real E_wm(o) test frames answers "is angle in the wm latent?": < 20° present, 20–45° weak, > 45° absent.
+- **`angle_audit` (eval only):** labelled grid of rendered angles, re-render consistency, mask-moment orientation vs label, CoG convention, target round trip, a non-learned template oracle on every frame type, and v1 probe train/val/test/grid errors. Convention (verified): radians wrapped to [−π, π); 0 = bar on top, stem down; angle grows clockwise on screen (image y points down).
+
 **Checkpoint round trip (every training job):** the reloaded `model.pt` weights must be bit-identical, and its outputs must match the trained model's within `torch.allclose(rtol=1e-4, atol=1e-5)`, both models in eval mode. The REPORT line shows the max absolute and relative difference and the tolerance. (Exact output equality failed on CUDA for the pixel U-Net, most likely because `ConvTranspose2d` can be nondeterministic there.)
 
 ## 8. CEM planner and MPC (`wm/planning/`)
@@ -180,7 +188,7 @@ Job group `train_baselines` = `train_wm_1step`, `train_pixel`, `train_bc`, `trai
 - Probe errors (block px, block °) on predicted frames (`wm` via decoder; `pixel` directly; `copy_last` = last real frame).
 - Pixel MSE.
 - 95% bootstrap CIs (1,000 resamples over windows).
-Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decoded | pixel). **Phase 5 (pre-registered in PROGRESS.md):** primary metrics are the probe's block CoG px / angle ° / pusher px (+ p̂ pusher px); headline NMSE is `wm_via_frames` = E_wm(D_wm(ẑ)); predicted frames are clipped to [−0.5, 0.5]; filmstrips are real | wm | wm_1step | pixel; settings in `configs/rollouts.yaml`. REPORT: table at k = 1, 5, 10 for every method + relative reduction (1 − wm ÷ pixel) at k = 5, 10. CHECK: wm NMSE < copy_last NMSE at every k.
+Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decoded | pixel). **Phase 5 (pre-registered in PROGRESS.md):** primary metrics are the probe's block CoG px / angle ° / pusher px (+ p̂ pusher px); headline NMSE is `wm_via_frames` = E_wm(D_wm(ẑ)); predicted frames are clipped to [−0.5, 0.5]; filmstrips are real | wm | wm_1step | pixel; settings in `configs/rollouts.yaml`. REPORT: table at k = 1, 5, 10 for every method + relative reduction (1 − wm ÷ pixel) at k = 5, 10. CHECK: wm NMSE < copy_last NMSE at every k. **Phase 5b:** the probe rows are reported by two judges side by side: `probe_mix` on predicted frames (references real, wm_recon, wm1step_recon) and the latent judge on latents (`wm` = direct ẑ, `wm_via_frames`, E_wm of wm_1step / pixel / copy_last frames, `real` = E_wm(o_{t+k})); `probe_v1` rows are kept, marked deprecated. **Headline rule:** "wm beats X on block px at k" is claimed only if both judges agree in sign, both paired 95% CIs exclude 0, and probe_mix passed acceptance. The REPORT prints `angle_in_wm_latent` (latent judge verdict, template oracle, predict-mean) and every judge's angle on rendered grid poses. `rollouts.json` schema 2.
 
 **Planning (`planning.py`):** methods `cem_wm`, `cem_wm_1step`, `bc`, `random`, `noop`. Per method: success rate, Wilson 95% CI, median final pos/angle error, mean steps-to-success, seconds per episode.
 - Job `plan_val`: all methods, 50 val pairs, 1 seed (smoke: 3 pairs, budget 10).
@@ -201,6 +209,8 @@ Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decode
 
 **Resume/skip:** a job whose output already exists with the same `config_hash` and `complete: true` prints "already finished, skipping" (unless `--force`). An eval job (one whose `needs` include `ckpt-*`) also records `inputs` (each needed checkpoint's producer config_hash) and only skips if they are still current. A training job whose latest checkpoint is incomplete resumes from it.
 
+**Hashes of jobs built on other artifacts (Phase 5b):** a job's config_hash also folds in the current config_hashes of every artifact it needs except `pusht-data` (frozen since Phase 2). So a judge or eval built from `ckpt-wm` gets a new hash when `wm.yaml` changes, and `pull_matching` never accepts a stale one. Jobs that need only `pusht-data` (all training jobs) keep their hashes (asserted in `tests/test_registry_phase5b.py`).
+
 **Groups:** a group (`jobs.yaml` `groups`; a member may itself be a group) runs its jobs in order. A job that FAILs is recorded and the remaining jobs still run; at the end one `GROUP <name>: OK|FAILED (...) | PASS ... | SKIP ... | FAIL ...` line is printed, and the exit code is non-zero if any job failed.
 
 **Loading trained checkpoints (rule for every eval job: `diagnose_wm`, `eval_rollouts`, `plan_val`, `plan_sweep`, `final_eval`):** load `ckpt-wm`, `ckpt-wm-1step` (and any other `ckpt-*`) only through `wm/jobs/_ckpt.py::pull_matching`, which takes the first read candidate that is `complete: true` and whose `config_hash` equals what the producing job's *current* config gives; if none matches, FAIL with a message naming what was found. The REPORT prints the checkpoint's config_hash (and, for world models, the `proprio` flag). Without this, smoke mode's "read `<name>` first" rule would silently pick an older recipe.
@@ -214,7 +224,12 @@ Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decode
 | `wm_ablate` | 3b | `pusht-data` | `results-wm-ablate` (+ `results/ablation_wm_fixes.json`) |
 | `train_baselines` | 4 | `pusht-data` | `ckpt-wm-1step`, `ckpt-pixel`, `ckpt-bc`, `ckpt-probe` |
 | `overnight` (group) | 4 | `pusht-data` | `train_wm` → `diagnose_wm` → `train_baselines`, each skipped if complete |
-| `eval_rollouts` | 5 | data + `ckpt-wm`, `ckpt-wm-1step`, `ckpt-pixel`, `ckpt-probe` | `results-rollouts` |
+| `angle_audit` | 5b | data + `ckpt-probe`, `ckpt-wm`, `ckpt-wm-1step`, `ckpt-pixel` | `results-angle-audit` (+ `results/angle_audit.json`) |
+| `render_judge_data` | 5b | – | `judge-data` |
+| `train_probe_mix` | 5b | data + `judge-data`, `ckpt-wm`, `ckpt-wm-1step`, `ckpt-pixel` | `ckpt-probe-mix` |
+| `train_latent_probe` | 5b | data + `judge-data`, `ckpt-wm` | `ckpt-latent-probe` |
+| `phase5b` (group) | 5b | as its members | `angle_audit` → `render_judge_data` → `train_probe_mix` → `train_latent_probe` → `eval_rollouts` |
+| `eval_rollouts` | 5 | data + `ckpt-wm`, `ckpt-wm-1step`, `ckpt-pixel`, `ckpt-probe`, `ckpt-probe-mix`, `ckpt-latent-probe` | `results-rollouts` |
 | `plan_val` | 6 | data + `ckpt-wm`, `ckpt-wm-1step`, `ckpt-bc` (+ makes `eval-pairs` if missing) | `results-plan-val` |
 | `plan_sweep` | 6 | as `plan_val` | `results-plan-sweep` |
 | `final_eval` | 7 | everything above | `results-final`, `results-bundle` |

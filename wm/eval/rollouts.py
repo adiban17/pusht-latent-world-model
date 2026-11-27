@@ -83,13 +83,19 @@ def recon_wm(model: WorldModel, frames: torch.Tensor) -> torch.Tensor:
 
 # ---- per-window scores [B, H] -----------------------------------------------------------
 @torch.no_grad()
-def probe_scores(probe: StateProbe, frames: torch.Tensor, states: np.ndarray) -> dict[str, np.ndarray]:
-    """Probe errors (block CoG px, block angle deg, pusher px) on frames [B, H, 3, 64, 64]
-    vs the true states [B, H, 5]."""
-    probe.eval()
-    b, h = frames.shape[:2]
-    pred = probe(frames.reshape(b * h, *frames.shape[2:])).float().cpu().numpy().reshape(b, h, 6)
+def judge_scores(judge: torch.nn.Module, x: torch.Tensor, states: np.ndarray) -> dict[str, np.ndarray]:
+    """Judge errors (block CoG px, block angle deg, pusher px) on inputs x [B, H, ...] vs the true
+    states [B, H, 5]. Inputs are frames [B, H, 3, 64, 64] for an image judge (StateProbe) or
+    latents [B, H, 256] for the latent judge (LatentProbe, Phase 5b)."""
+    judge.eval()
+    b, h = x.shape[:2]
+    pred = judge(x.reshape(b * h, *x.shape[2:]).float()).float().cpu().numpy().reshape(b, h, 6)
     return probe_errors(decode_targets(pred), states)
+
+
+def probe_scores(probe: StateProbe, frames: torch.Tensor, states: np.ndarray) -> dict[str, np.ndarray]:
+    """Image-probe errors on frames [B, H, 3, 64, 64] (Phase 5 name of judge_scores)."""
+    return judge_scores(probe, frames, states)
 
 
 def latent_sq_err(z_pred: torch.Tensor, z_true: torch.Tensor) -> np.ndarray:
@@ -165,3 +171,29 @@ def all_finite(obj: Any) -> bool:
     if isinstance(obj, (list, tuple)):
         return all(all_finite(v) for v in obj)
     return not isinstance(obj, float) or bool(np.isfinite(obj))
+
+
+# ---- Phase 5b headline rule ----------------------------------------------------------------
+def ci_call(s: dict[str, float]) -> str:
+    """Direction of a paired difference wm - other with its CI: 'wm better' (CI below 0),
+    'wm worse' (CI above 0) or 'inconclusive' (CI includes 0)."""
+    if s["hi"] < 0:
+        return "wm better"
+    if s["lo"] > 0:
+        return "wm worse"
+    return "inconclusive"
+
+
+def headline_claim(image: dict[str, float], latent: dict[str, float], image_accepted: bool) -> dict[str, str]:
+    """Pre-registered (Phase 5b): a claim "wm beats / loses to X" is made only if both judges
+    agree in sign and both paired 95% CIs exclude 0 (and the image judge passed acceptance)."""
+    ci, cl = ci_call(image), ci_call(latent)
+    if not image_accepted:
+        claim = "no claim: image judge not accepted"
+    elif ci == cl and ci != "inconclusive":
+        claim = ci
+    elif "inconclusive" in (ci, cl):
+        claim = f"no claim: a CI includes 0 (image {ci}, latent {cl})"
+    else:
+        claim = f"no claim: judges disagree (image {ci}, latent {cl})"
+    return {"image": ci, "latent": cl, "claim": claim}

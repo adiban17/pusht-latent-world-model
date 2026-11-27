@@ -166,7 +166,7 @@ def test_is_finished_stale_when_a_checkpoint_hash_changes(monkeypatch):
     entry = reg["jobs"]["eval_rollouts"]
     chash = run.job_config_hash("eval_rollouts", entry, run.load_job_config(entry))
     inputs = run.input_hashes(entry, reg)
-    assert set(inputs) == {"ckpt-wm", "ckpt-wm-1step", "ckpt-pixel", "ckpt-probe"}
+    assert set(inputs) == {"ckpt-wm", "ckpt-wm-1step", "ckpt-pixel", "ckpt-probe", "ckpt-probe-mix", "ckpt-latent-probe"}
 
     class FakeStore:
         def __init__(self, meta):
@@ -199,6 +199,7 @@ def synthetic_npz(seeds, length, seed):
 
 
 def test_eval_rollouts_smoke_job(isolated_dirs, capsys):
+    from wm.models.latent_probe import build_latent_probe
     from wm.models.pixel_unet import build_pixel_unet
     from wm.models.probe import build_probe
     from wm.models.world_model import build_world_model
@@ -215,7 +216,9 @@ def test_eval_rollouts_smoke_job(isolated_dirs, capsys):
     for art, cfg_file, build in (("ckpt-wm", "wm.yaml", build_world_model),
                                  ("ckpt-wm-1step", "wm_1step.yaml", build_world_model),
                                  ("ckpt-pixel", "pixel.yaml", build_pixel_unet),
-                                 ("ckpt-probe", "probe.yaml", build_probe)):
+                                 ("ckpt-probe", "probe.yaml", build_probe),
+                                 ("ckpt-probe-mix", "probe_mix.yaml", build_probe),
+                                 ("ckpt-latent-probe", "latent_probe.yaml", build_latent_probe)):
         cfg = load_yaml(REPO_ROOT / "configs" / cfg_file)
         h = producer(art)[1]
         d = isolated_dirs / art
@@ -227,23 +230,45 @@ def test_eval_rollouts_smoke_job(isolated_dirs, capsys):
     assert run.main(["--job", "eval_rollouts"]) == 0
     out = capsys.readouterr().out
     assert "[FAIL]" not in out and "windows: 20 of 28 test windows" in out
-    assert "probe_angle_floor" in out and "block_px_wm_minus_pixel" in out
+    assert "probe_angle_floor_probe_mix" in out and "probe_mix_block_px_wm_minus_pixel" in out
+    assert "angle_in_wm_latent" in out and "headline_wm_vs_pixel_k10" in out and "grid_angle_deg" in out
 
     art = isolated_dirs / "outputs" / "eval_rollouts" / "artifact"
     res = json.loads((art / "rollouts.json").read_text())
     assert res["windows"]["n"] == 20 and res["headline"]["nmse_row"] == "wm_via_frames"
-    assert set(res["metrics"]["block_px"]) == {"wm", "wm_1step", "pixel", "copy_last", "real", "wm_recon"}
+    assert res["schema"] == 2
+    assert res["judges"]["probe_v1"]["status"] == "deprecated (judge failure)"
+    assert res["judges"]["probe_mix"]["accepted"] is False            # no train_summary -> not accepted
+    assert all(h["claim"] == "no claim: image judge not accepted" for h in res["headline"]["block_px"].values())
+    assert set(res["metrics"]["probe_v1/block_px"]) == {"wm", "wm_1step", "pixel", "copy_last", "real", "wm_recon"}
+    assert set(res["metrics"]["probe_mix/block_px"]) == {"wm", "wm_1step", "pixel", "copy_last", "real",
+                                                         "wm_recon", "wm1step_recon"}
+    assert set(res["metrics"]["latent/block_deg"]) == {"wm", "wm_via_frames", "wm_1step", "pixel", "copy_last", "real"}
+    assert res["angle_in_wm_latent"]["verdict"].split(" ")[0] in ("present", "weak", "absent")
     assert set(res["metrics"]["nmse"]) == {"wm_via_frames", "wm_1step", "pixel", "copy_last", "wm", "wm_recon"}
     assert set(res["metrics"]["p_hat_pusher_px"]) == {"wm", "wm_1step", "copy_last"}
-    for metric in ("block_px", "block_deg", "pusher_px", "p_hat_pusher_px", "nmse", "pixel_mse"):
+    for metric in [f"{j}/{k}" for j in ("probe_v1", "probe_mix", "latent")
+                   for k in ("block_px", "block_deg", "pusher_px")] + ["p_hat_pusher_px", "nmse", "pixel_mse"]:
         for s in res["metrics"][metric].values():
             assert set(s) == {"mean", "lo", "hi"} and len(s["mean"]) == H
-    for key in ("block_px_diff_wm_minus_pixel", "nmse_reduction_wm_via_frames_vs_pixel"):
+    for key in ("probe_mix/block_px_diff_wm_minus_pixel", "latent/block_px_diff_wm_minus_wm_1step",
+                "nmse_reduction_wm_via_frames_vs_pixel"):
         assert len(res["paired"][key]["lo"]) == H
     assert res["metrics"]["nmse"]["copy_last"]["mean"][0] > 0
-    assert len(list((art / "plots").glob("*.png"))) == 5 and len(list((art / "filmstrips").glob("*.png"))) == 6
+    assert len(list((art / "plots").glob("*.png"))) == 11 and len(list((art / "filmstrips").glob("*.png"))) == 6
     meta = store.metadata("results-rollouts-smoke")
-    assert meta["complete"] and set(meta["inputs"]) == {"ckpt-wm", "ckpt-wm-1step", "ckpt-pixel", "ckpt-probe"}
+    assert meta["complete"] and set(meta["inputs"]) == {"ckpt-wm", "ckpt-wm-1step", "ckpt-pixel", "ckpt-probe", "ckpt-probe-mix", "ckpt-latent-probe"}
 
     assert run.main(["--job", "eval_rollouts"]) == 0
     assert "already finished, skipping" in capsys.readouterr().out
+
+
+# ---- Phase 5b headline rule ----------------------------------------------------------------------
+def test_headline_claim_needs_agreement_and_both_cis():
+    from wm.eval.rollouts import headline_claim
+    better, worse, zero = {"lo": -5, "hi": -1}, {"lo": 1, "hi": 5}, {"lo": -1, "hi": 1}
+    assert headline_claim(better, better, True)["claim"] == "wm better"
+    assert headline_claim(worse, worse, True)["claim"] == "wm worse"
+    assert headline_claim(better, worse, True)["claim"].startswith("no claim: judges disagree")
+    assert headline_claim(better, zero, True)["claim"].startswith("no claim: a CI includes 0")
+    assert headline_claim(better, better, False)["claim"] == "no claim: image judge not accepted"

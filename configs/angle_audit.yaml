@@ -1,0 +1,19 @@
+# Angle audit (Phase 5b, eval only): do the stored angle labels match the drawn T? Can a
+# non-learned reader get the angle from a 64x64 frame? Where does the v1 probe fail?
+seed: 0
+rerender_frames: 500        # stored frames (train + test) re-rendered from their stored states
+oracle_frames: 200          # real test frames (and their D_wm(E_wm(.))) read by the template oracle
+oracle_step_deg: 5.0        # template oracle angle resolution
+grid_angles_deg: [0, 30, 90, 180, 270]       # labelled grid image
+score_step_deg: 5.0         # scoring grid: every 5 deg ...
+score_positions: [[192, 192], [320, 192], [192, 320], [320, 320]]   # ... at these block CoGs (px)
+probe_train_frames: 2000    # v1 probe errors on a fixed subset of train-split frames
+thresholds:
+  rerender_mean_abs_diff: 0.5   # uint8 levels; above = frames and states disagree (a bug)
+  orientation_err_deg: 10.0     # mask-moment angle vs state angle on the grid; above = a bug
+  roundtrip_deg: 0.001          # target encode/decode round trip
+  memorisation_ratio: 0.5       # train angle error < ratio x test angle error = memorisation
+smoke:
+  rerender_frames: 50
+  oracle_frames: 10
+  probe_train_frames: 200

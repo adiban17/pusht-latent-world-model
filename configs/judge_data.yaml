@@ -1,0 +1,11 @@
+# Rendered frames for the judges only (Phase 5b judge decision, PROGRESS.md).
+# wm, wm_1step, pixel and bc never see these; they train on the 20k transitions only.
+seed_start: 5000            # micro-episode i uses seed seed_start + i (disjoint from all data seeds)
+micro_episodes: 12500       # x steps frames = 50,000 frames
+steps: 4                    # frames per micro-episode: 3 context frames + 1 next frame
+val_frac: 0.1               # the first 10% of micro-episodes -> judge_val.npz (early stopping)
+cog_low: 85.0               # block centre of gravity uniform in [low, high]^2 (T stays inside walls)
+cog_high: 427.0
+action_sigma: 30.0          # random action target = pusher + N(0, sigma^2), clipped to the table
+smoke:
+  micro_episodes: 40

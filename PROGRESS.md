@@ -1,6 +1,6 @@
 # PROGRESS
 
-**Current phase: 5b (angle audit and fair judges), being built.** Kaggle `eval_rollouts` full (adc200d) showed the v1 probe is a broken judge (findings below), so Phase 5b adds an angle audit, two new judges (`probe_mix` on images, a latent MLP on E_wm) and reruns `eval_rollouts` with both. Its judge decisions are pre-registered below.
+**Current phase: 5b (angle audit and fair judges), built; local smoke PASS → Kaggle.** Kaggle `eval_rollouts` full (adc200d) showed the v1 probe is a broken judge (findings below), so Phase 5b adds an angle audit, two new judges (`probe_mix` on images, a latent MLP on E_wm) and reruns `eval_rollouts` with both. Its judge decisions are pre-registered below. Next: Aditya pushes, then runs Kaggle `phase5b` smoke → full and drops `results/angle_audit.json` and `results/rollouts.json` into `results/`.
 
 ## Status
 | Phase | Status | Local smoke | Kaggle smoke | Kaggle full |
@@ -11,7 +11,7 @@
 | 3b WM fixes | **complete** (A+B adopted) | PASS | PASS | PASS |
 | 4 Baselines | done locally | PASS | pending | pending |
 | 5 Rollout eval | Kaggle full done (adc200d); judge failed → 5b | PASS | PASS | PASS (`results/rollouts.json`) |
-| 5b Angle audit + judges | being built | – | – | – |
+| 5b Angle audit + judges | built; local smoke PASS | PASS | pending | pending |
 | 6 Planner | not started | – | – | – |
 | 7 Final eval | not started | – | – | – |
 | 8 Report | not started | – | – | – |
@@ -130,13 +130,22 @@
   - **Headline rule:** "wm beats X on block px at k" is claimed only if both judges agree in sign and both paired 95% CIs exclude 0; otherwise the README says the judges disagree.
   - **Angle verdict:** latent-MLP mean angle error on real E_wm(o) test frames < 20° = **present** (rotation goals plausible), 20–45° = **weak**, > 45° = **absent** (Phase 6 must restrict or flag rotation goals). It is printed beside the template oracle and predict-mean.
   - **No existing checkpoint retrains:** the training config_hash of train_wm, train_wm_1step, train_pixel, train_bc and train_probe stays unchanged (asserted in a test).
+- **Phase 5b build (2026-11-27), implementation decisions (no results yet):**
+  - **Angle convention, verified locally (`angle_audit`, `tests/test_angle_audit.py`):** radians wrapped to [−π, π); 0 = bar on top, stem pointing down; the angle grows clockwise on screen (image y points down); stored (x, y) = body origin, CoG = origin + R(θ)(0, 45). Re-rendering stored states reproduces stored frames exactly; the mask-moment angle matches the label within 1.7° mean (8.4° max) over 288 grid poses; the mask centroid sits 4.7 px from `block_cog` (the area centroid is 4.3 px from gym-pusht's CoG) vs 40 px from the body origin; target encode/decode round trip 0; wraps 359°/1° → 2°. The non-learned template oracle reads real test frames within ~1° (smoke, 10 frames). **No label bug.** In the 50-step smoke the v1 probe already shows train 8° vs test 103°: memorisation. The Kaggle run gives the real numbers.
+  - **Overlap check:** gym-pusht's one physics step after `reset_to_state` does *not* separate an overlapping pusher (it's kinematic), so a round trip can't detect overlap. Rendered states use pymunk's signed point-to-shape distance instead (pusher edge ≥ 2 px from the T).
+  - **Hash folding (`wm/registry.py`):** a job's config_hash includes the current hashes of everything it needs except `pusht-data`. Unchanged and asserted: train_wm d4c8e342b0d6, train_wm_1step dd5934291cbe, train_pixel 2438d918b486, train_bc dd9930d91fd0, train_probe 981a0e656148, collect_data 4af4e37608e6, wm_ablate 76b1611426f5. eval_rollouts changed (1c66c59f6bbc →), so it reruns.
+  - **angle_audit** also needs `ckpt-wm-1step` and `ckpt-pixel`, so the template oracle covers all four frame types (real, wm_recon, wm1step_recon, pixel_1step). That is the reference for "angle on derived types is reported, not gated".
+  - **Latent judge rows:** `wm` = direct ẑ (what the planner uses); `wm_via_frames` = E_wm(D_wm(ẑ)). The headline rule pairs probe_mix's `wm` (decoded frames) with the latent judge's `wm` (direct ẑ).
+  - **probe_mix fallback** (coord_gap) runs in the same job without intermediate checkpoints. If it's killed mid-fallback, a rerun redoes the fallback from scratch (the flatten run resumes as usual).
+  - **probe_mix with an untrained/unknown summary:** eval_rollouts treats a probe_mix without `accepted: true` in its train_summary as not accepted, so every headline says "no claim: image judge not accepted".
+  - **rollouts.json schema 2:** metric keys `<judge>/block_px|block_deg|pusher_px` for judges probe_v1 / probe_mix / latent; `judges` (status, accepted, test_all, grid); `angle_in_wm_latent`; `template_oracle_test`; `headline.block_px` claims; paired `<judge>/block_px_diff_wm_minus_{pixel,wm_1step,copy_last}`. NMSE, pixel MSE and p̂ are unchanged. 11 plots (3 judges × 3 metrics + NMSE + pixel MSE).
 
 ## Installed versions (local)
 python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, pygame 2.6.1, opencv-python(-headless) 4.14.0.94, numpy 2.5.5, wandb 0.31.2.
 
 ## Open issues
-- **Phase 5 smoke numbers mean nothing** (50-step CPU models, 20 windows of one test episode). The smoke probe's angle error is 103° (WARN `probe_angle_floor`), so the angle question waits for the Kaggle full run, where the `real`, `wm_recon` and `wm` angle rows will show where the angle is lost.
-- **Block angle is barely in z (from `results/ablation_wm_fixes.json`):** the ridge probe on *real* val latents gets 80–91° mean angle error in every row (a uniform random guess gives ~90°), while block position is 6.5–11.8 px. Imagined angle beats copy-last only because copy-last is near random too. This matters for rotation-heavy goals in Phase 6. The Phase 4 CNN probe and the Phase 5 rollout eval (probe on decoded frames) will show whether the angle is non-linearly present or missing; revisit before planning.
+- **Phase 5b open question (answered by the Kaggle `phase5b` full run):** is block angle in the wm latent? See `angle_in_wm_latent` in the `train_latent_probe` and `eval_rollouts` REPORTs (pre-registered thresholds: < 20° present, 20–45° weak, > 45° absent). This decides whether Phase 6 can attempt rotation goals. Labels are verified consistent (no bug), so a large error there is a property of the model or the judge, not the data.
+- **Block angle is barely in z (from `results/ablation_wm_fixes.json`; Phase 5b's latent judge, a nonlinear MLP, replaces this ridge-based reading):** the ridge probe on *real* val latents gets 80–91° mean angle error in every row (a uniform random guess gives ~90°), while block position is 6.5–11.8 px. Imagined angle beats copy-last only because copy-last is near random too. This matters for rotation-heavy goals in Phase 6. The Phase 4 CNN probe and the Phase 5 rollout eval (probe on decoded frames) will show whether the angle is non-linearly present or missing; revisit before planning.
 - Kaggle v1 val loss is almost all variance hinge (0.336 of 0.346): val latents are far less spread per dimension than train ones. `wm_ablate` reports z_std per row; revisit after it.
 - Getting `results/ablation_wm_fixes.json` into the repo: the Kaggle run writes it to `/kaggle/working/pusht-latent-world-model/results/` and to the W&B artifact `results-wm-ablate`; Aditya downloads that one file from the Kaggle output and drops it in `results/`.
 - The local smoke filmstrip's decoded row is still a blur (50 steps, batch 4, CPU); judge the decoder on the Kaggle full run.

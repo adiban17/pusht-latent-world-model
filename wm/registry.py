@@ -23,9 +23,25 @@ def load_job_config(entry: dict[str, Any]) -> dict[str, Any]:
     return load_yaml(path) if path.exists() else {}
 
 
-def job_config_hash(name: str, entry: dict[str, Any], cfg: dict[str, Any]) -> str:
-    """config_hash = hash of the job name, its jobs.yaml entry and its config file."""
-    return config_hash({"job": name, "entry": entry, "config": cfg})
+# Inputs that never change a consumer's hash: the dataset is frozen since Phase 2, and folding
+# it in would change (and retrain) every training job.
+FROZEN_INPUTS = ("pusht-data",)
+
+
+def job_config_hash(name: str, entry: dict[str, Any], cfg: dict[str, Any],
+                    registry: dict[str, Any] | None = None) -> str:
+    """config_hash = hash of the job name, its jobs.yaml entry and its config file, plus (Phase
+    5b) the current config_hashes of the artifacts it needs other than `pusht-data`.
+
+    So a job made from checkpoints (e.g. train_probe_mix from ckpt-wm) gets a new hash when one
+    of those checkpoints' configs changes: it retrains or reruns, and `pull_matching` downstream
+    never accepts a stale one. Jobs that need only `pusht-data` keep their old hash.
+    """
+    inputs = input_hashes(entry, registry)
+    payload: dict[str, Any] = {"job": name, "entry": entry, "config": cfg}
+    if inputs:
+        payload["inputs"] = inputs
+    return config_hash(payload)
 
 
 def expand_group(name: str, groups: dict[str, Any]) -> list[str]:
@@ -37,13 +53,18 @@ def expand_group(name: str, groups: dict[str, Any]) -> list[str]:
 
 
 def input_hashes(entry: dict[str, Any], registry: dict[str, Any] | None = None) -> dict[str, str]:
-    """{artifact: producer's current config_hash} for every `ckpt-*` the job needs.
+    """{artifact: producer's current config_hash} for every artifact the job needs except
+    `pusht-data` (FROZEN_INPUTS): checkpoints, and judge-data (Phase 5b).
 
     An eval job stores this in its results metadata (`inputs`); run.is_finished treats the
-    results as stale if a needed checkpoint's producer config changed since (Phase 5).
+    results as stale if a needed artifact's producer config changed since (Phase 5). Since
+    Phase 5b the same hashes are folded into the job's own config_hash.
     """
+    needs = [a for a in (entry.get("needs") or []) if a not in FROZEN_INPUTS]
+    if not needs:
+        return {}
     reg = registry or load_registry()
-    return {a: producer(a, reg)[1] for a in (entry.get("needs") or []) if a.startswith("ckpt-")}
+    return {a: producer(a, reg)[1] for a in needs}
 
 
 def producer(artifact: str, registry: dict[str, Any] | None = None) -> tuple[str, str]:
@@ -51,5 +72,5 @@ def producer(artifact: str, registry: dict[str, Any] | None = None) -> tuple[str
     reg = registry or load_registry()
     for name, entry in reg["jobs"].items():
         if artifact in (entry.get("makes") or []):
-            return name, job_config_hash(name, entry, load_job_config(entry))
+            return name, job_config_hash(name, entry, load_job_config(entry), reg)
     raise KeyError(f"no job in jobs.yaml makes '{artifact}'")
