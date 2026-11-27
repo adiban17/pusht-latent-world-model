@@ -1,6 +1,6 @@
 # PROGRESS
 
-**Current phase: 6 (CEM planner + validation tuning), built; local `phase6` smoke PASS → Kaggle.** Phase 6 adds make_pairs, train_bc_clean, the CEM planner / MPC runner, plan_val and plan_sweep; its decisions are pre-registered below. Next: Aditya pushes, runs Kaggle `phase6` smoke (we read cem_pixel's timing and decide its flag), then `phase6` full, and drops `results/plan_val.json`, `results/plan_sweep.json` and `results/eval_pairs_{val,test}.json` into `results/`; then I freeze `configs/plan.yaml`. Kaggle `phase5b` (angle verdict) is still pending and independent of Phase 6.
+**Current phase: 6 (CEM planner + validation tuning), built; local `phase6` smoke PASS → Kaggle.** Phase 6 adds make_pairs, train_bc_clean, the CEM planner / MPC runner, plan_val and plan_sweep; its decisions are pre-registered below. Next: Aditya pushes, runs Kaggle `phase6` smoke (we read cem_pixel's timing and decide its flag), then `phase6` full, and drops `results/plan_val.json`, `results/plan_sweep.json` and `results/eval_pairs_{val,test}.json` into `results/`; then I freeze `configs/plan.yaml`. Phase 5b is **done** (Kaggle full; judge freeze decision below).
 
 ## Status
 | Phase | Status | Local smoke | Kaggle smoke | Kaggle full |
@@ -11,7 +11,7 @@
 | 3b WM fixes | **complete** (A+B adopted) | PASS | PASS | PASS |
 | 4 Baselines | done (`overnight`; BC = `ckpt-bc:v3`, git 2227d6f) | PASS | PASS | PASS |
 | 5 Rollout eval | Kaggle full done (adc200d); judge failed → 5b | PASS | PASS | PASS (`results/rollouts.json`) |
-| 5b Angle audit + judges | built; local smoke PASS | PASS | pending | pending |
+| 5b Angle audit + judges | **DONE** (judges frozen, see Decisions) | PASS | PASS | PASS (`results/angle_audit.json`, `results/rollouts.json`) |
 | 6 Planner | built; local smoke PASS | PASS | pending | pending |
 | 7 Final eval | not started | – | – | – |
 | 8 Report | not started | – | – | – |
@@ -140,6 +140,19 @@
   - **probe_mix with an untrained/unknown summary:** eval_rollouts treats a probe_mix without `accepted: true` in its train_summary as not accepted, so every headline says "no claim: image judge not accepted".
   - **rollouts.json schema 2:** metric keys `<judge>/block_px|block_deg|pusher_px` for judges probe_v1 / probe_mix / latent; `judges` (status, accepted, test_all, grid); `angle_in_wm_latent`; `template_oracle_test`; `headline.block_px` claims; paired `<judge>/block_px_diff_wm_minus_{pixel,wm_1step,copy_last}`. NMSE, pixel MSE and p̂ are unchanged. 11 plots (3 judges × 3 metrics + NMSE + pixel MSE).
 
+- **Phase 5b results (Kaggle full; sources `results/angle_audit.json` (git 0382f7a) and `results/rollouts.json` (schema 2, git 0382f7a-dirty, 500 test windows); the Phase 5 `rollouts.json` is in git history at a343e14):**
+  - **angle_audit:** no label bug (rerender, orientation, CoG convention, round trip all clean); verdict "labels consistent; failure = probe generalisation (memorisation)". v1 probe angle: train 13.4° vs val 84.8°. Template oracle (non-learned, true position given), 200 frames each: real 1.4° mean, wm_recon 5.6°, wm1step_recon 3.4°, pixel_1step 1.9°.
+  - **probe_mix (flatten, best step 19000): NOT accepted.** Failed pre-registered checks: real angle 46.5° (gate < 15°), real block 15.5 px (gate ≤ 13.4), wm_recon pusher 117.0 px and wm1step_recon pusher 117.5 px (gate ≤ 1.5 × real 53.5 = 80.3 px). Passed: block px on every derived type and pixel_1step pusher. Test block px by frame type: real 15.5 / wm_recon 14.1 / wm1step_recon 15.7 / pixel_1step 14.5.
+  - **Latent judge** on real E_wm(o) test frames: block 7.0 px, angle 24.7°, pusher 86.6 px. **`angle_in_wm_latent` = 24.7° → weak** (thresholds < 20 present, > 45 absent; predict-mean 94.7°; template oracle 1.3° on 100 real test frames).
+  - **NMSE (headline row wm_via_frames):** reduction vs wm_1step at k = 10 **0.600 [0.512, 0.676]** (k = 5: 0.504); vs pixel **−0.454 [−0.900, −0.095]** at k = 10 (k = 5: −0.706 [−1.421, −0.249]): the pixel baseline is better.
+  - **Block px, wm − pixel (paired 95% CI):** latent k5 +2.9 [2.1, 3.6], k10 +3.4 [2.3, 4.5]; probe_mix k5 +2.9 [1.8, 4.1], k10 +2.4 [1.1, 4.0]: **pixel beats wm** under both judges. Means at k = 10 (latent): wm 20.9, pixel 17.5, wm_1step 32.6, copy_last 32.1, real 6.8 px. Both judges agree in sign on every headline comparison: wm worse than pixel (k5, k10), better than wm_1step and copy_last (k5, k10); the JSON's `headline` says "no claim: image judge not accepted" for all six (pre-registered rule).
+  - **Pusher, p̂ at k = 10:** wm 2.4 px, wm_1step 11.0, copy_last 66.8.
+  - **Imagined angle (diagnosed failure mode):** wm's imagined angle is worse than copy_last at every k under both learned judges (latent: k1 30.6° vs 25.9°, k10 66.1° vs 31.5°; probe_mix: k1 56.3° vs 42.3°, k10 79.7° vs 44.4°). Not yet confirmed by the template oracle on imagined frames (Phase 7 TODO (a)).
+- **Judge freeze decision (2026-11-27, by Aditya, made after seeing the Phase 5b results; a deviation from the pre-registered headline rule, which the README must disclose):**
+  - **Block position:** the **latent MLP judge is primary** (real-frame floor 7.0 px). probe_mix (flatten) is a **sign-agreement check only**: it failed its pre-registered acceptance (above) but reads block position consistently across frame types (real 15.5 / wm_recon 14.1 / wm1step_recon 15.7 / pixel_1step 14.5 px). The pre-registered rule required an accepted image judge for any headline claim; the README states this deviation explicitly.
+  - **Angle:** the **template oracle** (non-learned, true position given) is the only trusted angle reader (real 1.4°, wm_recon 5.6°). Learned-judge angle columns are reported but not trusted.
+  - **Pusher:** **p̂ only** (wm 2.4 px vs wm_1step 11.0 vs copy_last 66.8 at k = 10); image-judge pusher columns are not used.
+  - **Key findings carried forward:** angle_in_wm_latent 24.7° (weak); NMSE reduction vs wm_1step at k = 10 0.600 [0.512, 0.676]; the pixel baseline beats wm on NMSE and block px; wm's imagined angle is worse than copy_last at all k (diagnosed failure mode).
 - **Kaggle `train_bc` full (Phase 4, from the `overnight` run, as reported by Aditya):** `ckpt-bc:v3`, git 2227d6f, val action error **30.9 px** vs the constant mean-action baseline 33.3 px. Not retrained; `train_bc`'s hash stays dd9930d91fd0 (asserted in `tests/test_registry_phase6.py`).
 - **Phase 6 pre-registered decisions (2026-11-27, before any Phase 6 result):**
   1. **Planner state (z, p).** Each MPC step encodes the last 3 real frames with E_wm, `h = warmup(z_{t-2..t-1}, a_{t-2..t-1}, p_ctx = real pusher at t-2, t-1)`, then `rollout(z_t, h, a_cand, p0 = p_t)`; at episode start the first frame is repeated 3× and the current pusher position fills the padding actions and p_ctx. **The cost uses only z:** ‖ẑ_H − z_g‖² + β Σ_{k=1}^{H−1} ‖ẑ_k − z_g‖², β = 0.1, z_g = E_wm(goal frame); p̂ is fed back, never scored. `cem_wm_1step` uses the same code with `ckpt-wm-1step`.
@@ -160,11 +173,15 @@
   - Local smoke runs cem_pixel's episodes at N 16 / 2 rounds (CPU: a full-size call takes ~29 s); its timing probe is always full size. The Kaggle smoke runs everything full size.
   - plan_val saves 3 filmstrips (real frames 1..H | decoded imagined plan of the first step | goal) of the first cem_wm val episodes.
 
+## Phase 7 TODO
+- (a) **Template-oracle angle on imagined frames:** a column with the template oracle (non-learned, true position given) on *imagined* frames for wm (decoded ẑ), wm_1step, pixel and copy_last at k = 1, 5, 10, to confirm or refute the learned judges' "wm imagined angle worse than copy_last" finding with the only trusted angle reader.
+- (b) **"-dirty" on Kaggle:** full-mode jobs write `results/*.json` into the checkout, so later jobs in the same session report git "-dirty" (e.g. `rollouts.json` shows 0382f7a-dirty). Exclude `results/` from the dirty check in `wm/repro.git_info`.
+
 ## Installed versions (local)
 python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, pygame 2.6.1, opencv-python(-headless) 4.14.0.94, numpy 2.5.5, wandb 0.31.2.
 
 ## Open issues
-- **Phase 5b open question (answered by the Kaggle `phase5b` full run):** is block angle in the wm latent? See `angle_in_wm_latent` in the `train_latent_probe` and `eval_rollouts` REPORTs (pre-registered thresholds: < 20° present, 20–45° weak, > 45° absent). Phase 6 does not wait for it: the rotation / translation split and position-only success (pre-registered) show where angle matters. Labels are verified consistent (no bug), so a large error there is a property of the model or the judge, not the data.
+- **Angle in the wm latent is weak (Phase 5b: 24.7°, latent judge).** Phase 6 reports rotation vs translation pairs and position-only success (pre-registered) so the effect on planning is visible; rotation goals are kept, not restricted.
 - **Block angle is barely in z (from `results/ablation_wm_fixes.json`; Phase 5b's latent judge, a nonlinear MLP, replaces this ridge-based reading):** the ridge probe on *real* val latents gets 80–91° mean angle error in every row (a uniform random guess gives ~90°), while block position is 6.5–11.8 px. Imagined angle beats copy-last only because copy-last is near random too. This matters for rotation-heavy goals in Phase 6. The Phase 4 CNN probe and the Phase 5 rollout eval (probe on decoded frames) will show whether the angle is non-linearly present or missing; revisit before planning.
 - Kaggle v1 val loss is almost all variance hinge (0.336 of 0.346): val latents are far less spread per dimension than train ones. `wm_ablate` reports z_std per row; revisit after it.
 - Getting `results/ablation_wm_fixes.json` into the repo: the Kaggle run writes it to `/kaggle/working/pusht-latent-world-model/results/` and to the W&B artifact `results-wm-ablate`; Aditya downloads that one file from the Kaggle output and drops it in `results/`.
