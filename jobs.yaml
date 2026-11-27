@@ -89,17 +89,29 @@ jobs:
     config: configs/latent_probe.yaml
     needs: [pusht-data, judge-data, ckpt-wm]
     makes: [ckpt-latent-probe]
-  plan_val:
+  make_pairs:           # Phase 6: eval_pairs_{val,test}.json (CLAUDE.md §9 Pairs); deterministic from the data
+    phase: 6
+    module: wm.jobs.make_pairs
+    config: configs/pairs.yaml
+    needs: [pusht-data]
+    makes: [eval-pairs]
+  train_bc_clean:       # Phase 6: the same BC trained on the expert's clean actions (fair second BC)
+    phase: 6
+    module: wm.jobs.train_bc_clean
+    config: configs/bc_clean.yaml
+    needs: [pusht-data]
+    makes: [ckpt-bc-clean]
+  plan_val:             # all methods on the 50 val pairs, 1 seed; BC selection, tau, cem_pixel timing
     phase: 6
     module: wm.jobs.plan_val
     config: configs/plan.yaml
-    needs: [pusht-data, ckpt-wm, ckpt-wm-1step, ckpt-bc]
+    needs: [pusht-data, eval-pairs, ckpt-wm, ckpt-wm-1step, ckpt-bc, ckpt-bc-clean, ckpt-pixel]
     makes: [results-plan-val]
-  plan_sweep:
+  plan_sweep:           # cem_wm only, one CEM setting changed at a time; pre-registered freeze rule
     phase: 6
     module: wm.jobs.plan_sweep
     config: configs/plan.yaml
-    needs: [pusht-data, ckpt-wm, ckpt-wm-1step, ckpt-bc]
+    needs: [pusht-data, eval-pairs, ckpt-wm]
     makes: [results-plan-sweep]
   final_eval:
     phase: 7
@@ -124,6 +136,9 @@ groups:
   phase5b:              # angle audit -> judge data -> both judges -> rollout eval with both judges
     phase: 5
     jobs: [angle_audit, render_judge_data, train_probe_mix, train_latent_probe, eval_rollouts]
+  phase6:               # pairs -> clean-action BC -> validation planning -> CEM sweep
+    phase: 6
+    jobs: [make_pairs, train_bc_clean, plan_val, plan_sweep]
   overnight:            # one long Kaggle session: the world model, its diagnosis, then the baselines
     phase: 4            # (a member that is a group is expanded in place)
     jobs: [train_wm, diagnose_wm, train_baselines]

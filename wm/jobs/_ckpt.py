@@ -53,6 +53,9 @@ def _loader(artifact: str):
     if artifact in ("ckpt-probe", "ckpt-probe-mix"):
         from wm.models.probe import build_probe, param_counts
         return plain(build_probe), param_counts
+    if artifact in ("ckpt-bc", "ckpt-bc-clean"):
+        from wm.models.bc import build_bc, param_counts
+        return plain(build_bc), param_counts
     if artifact == "ckpt-latent-probe":
         from wm.models.latent_probe import build_latent_probe, param_counts
         return plain(build_latent_probe), param_counts

@@ -1,0 +1,46 @@
+# CEM planner + MPC (CLAUDE.md §8) and planning evaluation (§9). Used by plan_val and plan_sweep
+# (and final_eval in Phase 7). Phase 6 freezes the `cem` block after plan_sweep (rule below).
+seed: 0                 # planner seed; episode generator = seed * 100003 + pair index
+frozen: false
+budget: 40              # env steps per episode; stop at the first success
+cem:
+  candidates: 128       # N; one candidate is always the current mean
+  horizon: 10           # H
+  rounds: 4
+  elites: 12            # K
+  delta_clip: 50.0      # px, per step
+  sigma_init: 30.0      # px
+  sigma_floor: 2.0      # px
+  beta: 0.1             # running-cost weight: ||z_H - z_g||^2 + beta * sum_{k<H} ||z_k - z_g||^2
+  warm_start: true      # mu = previous best shifted by one (last = 0), else zeros
+methods:                # plan_val methods, in table order
+  cem_wm: true
+  cem_wm_1step: true
+  bc: true
+  bc_clean: true        # Phase 6: BC trained on clean actions; the better BC on val goes to the test
+  random: true          # delta ~ N(0, 30^2) through the waypoint transform
+  noop: true            # target = current pusher position
+  cem_pixel: true       # Phase 6 flag: CEM with the pixel U-Net; decided after the Kaggle smoke timing
+random_sigma: 30.0
+pixel_amp: true         # cem_pixel: fp16 autocast on CUDA
+timing:                 # full-size planning calls timed per CEM method (projected s/episode)
+  calls: 3
+selection:              # pre-registered (PROGRESS.md, Phase 6)
+  sweep_margin: 3       # a sweep variant replaces the default only with >= 3 more successes (of 50)
+  sweep_floor: 2        # if every setting has <= 2 successes, apply the rule to position-only success (subset)
+tau_percentile: 95      # imagined-success threshold: pct of ||E(o) - E(o')||^2 over val frame pairs that are successes
+tau_max_pairs: 20000
+filmstrips: 3           # plan_val: real frames | decoded imagined plan, first cem_wm val episodes
+sweep:                  # plan_sweep: cem_wm only, one change at a time from `cem`
+  candidates: [32, 64, 128, 256]
+  rounds: [1, 2, 4]
+  horizon: [5, 10, 15]
+  beta: [0.0, 0.1]
+smoke:
+  pairs: 3
+  budget: 10
+  local_pixel:          # local CPU smoke only: smaller cem_pixel search (timing probe stays full size)
+    candidates: 16
+    rounds: 2
+  timing_calls: 1
+  tau_max_pairs: 2000

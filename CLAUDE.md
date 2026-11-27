@@ -40,7 +40,7 @@ pusht-latent-world-model/
 ├── run.py                       # the only entry point: python run.py --job <name> --mode smoke|full [--force]
 ├── jobs.yaml                    # job registry (§10)
 ├── configs/
-│   ├── data.yaml  wm.yaml  wm_1step.yaml  pixel.yaml  bc.yaml  probe.yaml  plan.yaml
+│   ├── data.yaml  wm.yaml  wm_1step.yaml  pixel.yaml  bc.yaml  bc_clean.yaml  probe.yaml  pairs.yaml  plan.yaml
 ├── wm/
 │   ├── platform.py              # detect local / kaggle / colab; output dirs
 │   ├── store.py                 # artifact store: local folder on Mac, W&B Artifacts on Kaggle/Colab
@@ -176,8 +176,9 @@ Job group `train_baselines` = `train_wm_1step`, `train_pixel`, `train_bc`, `trai
 | update | μ, σ = mean, std of elites |
 
 - Context each step: last 3 real frames and the 2 actions between them; at episode start, repeat the first frame 3× and use the pusher's current position as the padding actions.
+- **Phase 6 (proprio):** the planner state is (z, p): `h = warmup(z_ctx, a_ctx, p_ctx)` with the real pusher positions (padding = current pusher), `rollout(z_t, h, a, p0=p_t)`; p̂ is fed back but never scored. The cost uses only the image latent z_g = E_wm(goal frame).
 - `run_episode(env, start_state, goal_frame, goal_state, policy, budget=40)`: reset_to_state; loop: act, step, check `is_success` every step, stop on success. Return success, steps, final errors, per-step best imagined cost, real frames, and (CEM) imagined plan latents for visualisation.
-- Policies with one interface: `CEMPolicy(wm)`, `BCPolicy`, `RandomPolicy` (δ ~ N(0, 30²) through the same waypoint transform), `NoopPolicy` (target = current pusher position).
+- Policies with one interface: `CEMPolicy(wm)`, `BCPolicy`, `RandomPolicy` (δ ~ N(0, 30²) through the same waypoint transform), `NoopPolicy` (target = current pusher position). **Phase 6 flag:** `PixelCEMPolicy(unet, wm)` (`cem_pixel`, `methods.cem_pixel` in plan.yaml): the same CEM and cost with the pixel U-Net's autoregressive rollout as dynamics; predicted frames clipped to [−0.5, 0.5] and encoded by E_wm; fp16 autocast on CUDA. Whether it joins the final comparison is decided from its timing in the Kaggle `plan_val` smoke.
 - `configs/plan.yaml` holds these values; Phase 6 freezes them after validation tuning.
 
 ## 9. Evaluation (`wm/eval/`)
@@ -190,13 +191,15 @@ Job group `train_baselines` = `train_wm_1step`, `train_pixel`, `train_bc`, `trai
 - 95% bootstrap CIs (1,000 resamples over windows).
 Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decoded | pixel). **Phase 5 (pre-registered in PROGRESS.md):** primary metrics are the probe's block CoG px / angle ° / pusher px (+ p̂ pusher px); headline NMSE is `wm_via_frames` = E_wm(D_wm(ẑ)); predicted frames are clipped to [−0.5, 0.5]; filmstrips are real | wm | wm_1step | pixel; settings in `configs/rollouts.yaml`. REPORT: table at k = 1, 5, 10 for every method + relative reduction (1 − wm ÷ pixel) at k = 5, 10. CHECK: wm NMSE < copy_last NMSE at every k. **Phase 5b:** the probe rows are reported by two judges side by side: `probe_mix` on predicted frames (references real, wm_recon, wm1step_recon) and the latent judge on latents (`wm` = direct ẑ, `wm_via_frames`, E_wm of wm_1step / pixel / copy_last frames, `real` = E_wm(o_{t+k})); `probe_v1` rows are kept, marked deprecated. **Headline rule:** "wm beats X on block px at k" is claimed only if both judges agree in sign, both paired 95% CIs exclude 0, and probe_mix passed acceptance. The REPORT prints `angle_in_wm_latent` (latent judge verdict, template oracle, predict-mean) and every judge's angle on rendered grid poses. `rollouts.json` schema 2.
 
-**Planning (`planning.py`):** methods `cem_wm`, `cem_wm_1step`, `bc`, `random`, `noop`. Per method: success rate, Wilson 95% CI, median final pos/angle error, mean steps-to-success, seconds per episode.
-- Job `plan_val`: all methods, 50 val pairs, 1 seed (smoke: 3 pairs, budget 10).
-- Job `plan_sweep`: val pairs only; from the default, vary one at a time: N ∈ {32, 64, 128, 256}, rounds ∈ {1, 2, 4}, H ∈ {5, 10, 15}, β ∈ {0, 0.1}; `cem_wm` only. REPORT: table of success vs setting.
+**Planning (`planning.py`):** methods `cem_wm`, `cem_wm_1step`, `bc`, `bc_clean` (Phase 6), `random`, `noop` (+ `cem_pixel` behind its flag). Per method: success rate, Wilson 95% CI, median final pos/angle error, mean steps-to-success, seconds per episode. **Phase 6 secondary metrics (pre-registered, every method, Wilson CIs):** position-only success (block CoG < 20 px after any step; headline on pairs whose start CoG error ≥ 20 px); both success metrics split into rotation pairs (|goal angle − start angle| ≥ 20°) and translation pairs, with the pair count of each group; per-pair final pos/angle errors in the JSON. Primary success is unchanged.
+- Job `make_pairs` (Phase 6): writes both pair files to `eval-pairs` (`configs/pairs.yaml`).
+- Job `train_bc_clean` (Phase 6): the §6 BC on `clean_actions` (`configs/bc_clean.yaml`) → `ckpt-bc-clean`. The BC variant with more val successes (ties: position-only success, then lower median final pos px, then `bc`) goes to the final test; `plan_val` records it as `bc_selected`.
+- Job `plan_val`: all methods, 50 val pairs, 1 seed (smoke: 3 pairs, budget 10). Also a full-size timing probe per CEM method (projected s/episode) and the val-calibrated imagined-success threshold τ (95th percentile of ‖E_wm(o_i) − E_wm(o_j)‖² over same-val-episode frame pairs whose states satisfy `is_success`; imagined success = terminal ‖ẑ_H − z_g‖² < τ), used by Phase 7's failure tags.
+- Job `plan_sweep`: val pairs only; from the default, vary one at a time: N ∈ {32, 64, 128, 256}, rounds ∈ {1, 2, 4}, H ∈ {5, 10, 15}, β ∈ {0, 0.1}; `cem_wm` only. REPORT: table of success vs setting. **Freeze rule (pre-registered):** a variant replaces the default only with ≥ 3 more successes (of 50); several → the most, ties → the cheaper N × rounds × H; if every setting has ≤ 2 successes the rule runs on position-only success. The selected values go into `plan.yaml` (`frozen: true`) for every CEM method.
 - Job `final_eval` (Phase 7): uses the frozen config; `plan_test` = all methods × 200 test pairs × 3 planner seeds, each pair used exactly once per method and seed; McNemar exact test `cem_wm` vs `bc` (`scipy.stats.binomtest` on discordant pairs), per seed and pooled; goal-distance sweep (offsets 10/20/30, `cem_wm` and `bc`, 100 pairs each, 1 seed); failure tags for each failed `cem_wm` episode — `model_error` (best imagined cost fell below the val-calibrated "imagined success" threshold, real outcome failed), `search_error` (never below it), `contact_switch` (the needed push direction changes by > 90° during the episode), `rotation_heavy` (|Δθ| ≥ 30° and Δpos < 30 px); a gallery of 6 failed episodes (real frames beside the decoded imagined plan); finally `results_bundle.zip` with every results JSON, plot and gallery image, saved to the output dir and the store.
 - **Tuning discipline:** only `plan_val`/`plan_sweep` touch val pairs; only `final_eval` touches test pairs; nothing is tuned after `final_eval`.
 
-**Stretch (only if asked):** context C = 1 ablation, pixel baseline with 10-step rollout loss, BC on clean actions, 2 extra training seeds for `wm` and `bc`.
+**Stretch (only if asked):** context C = 1 ablation, pixel baseline with 10-step rollout loss, 2 extra training seeds for `wm` and `bc`.
 
 ## 10. Runner: platform, store, jobs, REPORT
 **Platform (`wm/platform.py`):** `kaggle` if env var `KAGGLE_KERNEL_RUN_TYPE` exists; `colab` if `google.colab` is importable; else `local`. Output dir: `/kaggle/working/outputs`, `/content/outputs`, `./outputs`.
@@ -230,8 +233,11 @@ Write `rollouts.json`, plots of each metric vs k, 6 filmstrips (real | wm decode
 | `train_latent_probe` | 5b | data + `judge-data`, `ckpt-wm` | `ckpt-latent-probe` |
 | `phase5b` (group) | 5b | as its members | `angle_audit` → `render_judge_data` → `train_probe_mix` → `train_latent_probe` → `eval_rollouts` |
 | `eval_rollouts` | 5 | data + `ckpt-wm`, `ckpt-wm-1step`, `ckpt-pixel`, `ckpt-probe`, `ckpt-probe-mix`, `ckpt-latent-probe` | `results-rollouts` |
-| `plan_val` | 6 | data + `ckpt-wm`, `ckpt-wm-1step`, `ckpt-bc` (+ makes `eval-pairs` if missing) | `results-plan-val` |
-| `plan_sweep` | 6 | as `plan_val` | `results-plan-sweep` |
+| `make_pairs` | 6 | `pusht-data` | `eval-pairs` |
+| `train_bc_clean` | 6 | `pusht-data` | `ckpt-bc-clean` |
+| `plan_val` | 6 | data + `eval-pairs`, `ckpt-wm`, `ckpt-wm-1step`, `ckpt-bc`, `ckpt-bc-clean`, `ckpt-pixel` | `results-plan-val` |
+| `plan_sweep` | 6 | data + `eval-pairs`, `ckpt-wm` | `results-plan-sweep` |
+| `phase6` (group) | 6 | as its members | `make_pairs` → `train_bc_clean` → `plan_val` → `plan_sweep` |
 | `final_eval` | 7 | everything above | `results-final`, `results-bundle` |
 | `make_report` | 8 | local `results/` | README |
 

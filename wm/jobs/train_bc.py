@@ -1,4 +1,7 @@
-"""Job train_bc (Phase 4): goal-conditioned behaviour cloning (CLAUDE.md §6) -> store `ckpt-bc`."""
+"""Job train_bc (Phase 4): goal-conditioned behaviour cloning (CLAUDE.md §6) -> store `ckpt-bc`.
+
+`run_bc` is shared with train_bc_clean (Phase 6), which trains the same model on clean actions.
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -16,7 +19,12 @@ ARTIFACT = "ckpt-bc"
 
 
 def run(ctx: JobContext, report: Report) -> None:
-    job = TrainingJob(ctx, ARTIFACT)
+    run_bc(ctx, report, ARTIFACT)
+
+
+def run_bc(ctx: JobContext, report: Report, artifact: str) -> None:
+    """Train BC with ctx.config (bc.yaml or bc_clean.yaml) and push it as `artifact`."""
+    job = TrainingJob(ctx, artifact)
     cfg, tcfg, device = job.cfg, job.tcfg, ctx.device
     scale = float(cfg["delta_scale"])
 

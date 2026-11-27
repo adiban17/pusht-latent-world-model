@@ -1,0 +1,13 @@
+# Evaluation pairs (CLAUDE.md §9 Pairs, Phase 6). Job make_pairs -> store `eval-pairs`.
+seed: 0
+offset: 20            # goal frame = start + offset (same episode)
+start_step: 5         # candidate starts t in {0, 5, ..., start_max}
+start_max: 75
+min_move_px: 30.0     # keep a pair if the block CoG moves >= 30 px ...
+min_turn_deg: 20.0    # ... or turns >= 20 deg between start and goal
+n_test: 200           # from pusht_test.npz (seeds 1000-1029); only final_eval (Phase 7) reads them
+n_val: 50             # from the val episodes of pusht_train.npz (seeds 190-199)
+val_seeds: [190, 199]
+smoke:
+  n_test: 3
+  n_val: 3
