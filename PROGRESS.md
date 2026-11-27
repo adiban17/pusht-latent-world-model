@@ -1,6 +1,6 @@
 # PROGRESS
 
-**Current phase: 6 (CEM planner + validation tuning), built; local `phase6` smoke PASS → Kaggle.** Phase 6 adds make_pairs, train_bc_clean, the CEM planner / MPC runner, plan_val and plan_sweep; its decisions are pre-registered below. Next: Aditya pushes, runs Kaggle `phase6` smoke (we read cem_pixel's timing and decide its flag), then `phase6` full, and drops `results/plan_val.json`, `results/plan_sweep.json` and `results/eval_pairs_{val,test}.json` into `results/`; then I freeze `configs/plan.yaml`. Phase 5b is **done** (Kaggle full; judge freeze decision below).
+**Current phase: 6 (CEM planner + validation tuning); local and Kaggle `phase6` smoke PASS → Kaggle full.** Phase 6 adds make_pairs, train_bc_clean, the CEM planner / MPC runner, plan_val and plan_sweep; its decisions are pre-registered below. Next: Aditya pushes, runs Kaggle `phase6` smoke (we read cem_pixel's timing and decide its flag), then `phase6` full, and drops `results/plan_val.json`, `results/plan_sweep.json` and `results/eval_pairs_{val,test}.json` into `results/`; then I freeze `configs/plan.yaml`. Phase 5b is **done** (Kaggle full; judge freeze decision below).
 
 ## Status
 | Phase | Status | Local smoke | Kaggle smoke | Kaggle full |
@@ -12,7 +12,7 @@
 | 4 Baselines | done (`overnight`; BC = `ckpt-bc:v3`, git 2227d6f) | PASS | PASS | PASS |
 | 5 Rollout eval | Kaggle full done (adc200d); judge failed → 5b | PASS | PASS | PASS (`results/rollouts.json`) |
 | 5b Angle audit + judges | **DONE** (judges frozen, see Decisions) | PASS | PASS | PASS (`results/angle_audit.json`, `results/rollouts.json`) |
-| 6 Planner | built; local smoke PASS | PASS | pending | pending |
+| 6 Planner | built; Kaggle smoke PASS; cem_pixel pre-registered | PASS | PASS | pending |
 | 7 Final eval | not started | – | – | – |
 | 8 Report | not started | – | – | – |
 
@@ -165,6 +165,11 @@
   8. **Sweep freeze rule (`plan_sweep`, cem_wm only, 9 settings: default; N 32/64/256; rounds 1/2; H 5/15; β 0):** a variant replaces the default only with ≥ 3 more successes (of 50); several → the most, ties → the cheaper N × rounds × H; if every setting has ≤ 2 successes, the same rule runs on position-only success (start ≥ 20 px). `plan_sweep` computes `selected` mechanically; I then write it into `configs/plan.yaml` (`frozen: true`); it applies to every CEM method.
   9. **Imagined-success threshold τ (for Phase 7's `model_error` / `search_error` tags, calibrated on val in plan_val):** the 95th percentile of ‖E_wm(o_i) − E_wm(o_j)‖² over frame pairs of the same val episode whose states satisfy `is_success`; imagined success = the terminal term ‖ẑ_H − z_g‖² of the step's best plan < τ.
   10. **Seeds:** planner seed 0; each episode's CPU generator = seed × 100003 + pair index (CEM sampling and the random policy).
+- **Phase 6 Kaggle smoke (as reported by Aditya; REPORT not pasted here):** `phase6` group PASS, 4 of 4 jobs (make_pairs, train_bc_clean, plan_val, plan_sweep). T4 timing probe (full size: N 128, 4 rounds, H 10): cem_pixel **0.380 s per planning call** vs cem_wm **0.023 s** (about 16× slower); cem_pixel projected **12.8 min for 50 val pairs** (upper bound, all 40 steps).
+- **cem_pixel pre-registration (2026-11-27, written BEFORE the `phase6` full run):**
+  - **cem_pixel is included in validation:** `configs/plan.yaml` line 23 `cem_pixel: true` (plan_val reads the same `methods` block in smoke and full mode). It runs on the 50 val pairs with every other method.
+  - **Final test (Phase 7):** cem_pixel runs with **1 planner seed (seed 0) only**; all other methods run 3 seeds. Reason: compute (about 2.6 h for 3 seeds on 200 test pairs). Its comparisons use seed 0 only, and the README says so.
+  - **Watch item:** in the Kaggle smoke, imagined success (terminal ‖ẑ_H − z_g‖² < τ) disagreed with real outcomes: cem_wm 2/3 episodes imagined success, 2 of them failed for real; cem_wm_1step 3/3 imagined, 3 failed for real. The full plan_val REPORT's `imagined_success_*` lines give the imagined-vs-real gap per CEM method; record it with the full results.
 - **Phase 6 build (2026-11-27), implementation decisions (no results yet):**
   - `configs/pairs.yaml` is separate from `plan.yaml`, so freezing the CEM values does not change `eval-pairs`' hash. Pairs: starts 0..75 step 5, offset 20, ≥ 30 px or ≥ 20°, seed 0, 200 test / 50 val (smoke 3 / 3; the local smoke has no val episodes, so its last train episode stands in, as in training).
   - plan_val needs `ckpt-pixel` (for cem_pixel) and `ckpt-bc-clean`; plan_sweep needs only `eval-pairs` and `ckpt-wm`. Both store `inputs` and fold the input hashes in (Phase 5b rule).
@@ -174,6 +179,7 @@
   - plan_val saves 3 filmstrips (real frames 1..H | decoded imagined plan of the first step | goal) of the first cem_wm val episodes.
 
 ## Phase 7 TODO
+- **Seeds (pre-registered in Phase 6):** `final_eval` runs cem_pixel with planner seed 0 only; all other methods with 3 seeds.
 - (a) **Template-oracle angle on imagined frames:** a column with the template oracle (non-learned, true position given) on *imagined* frames for wm (decoded ẑ), wm_1step, pixel and copy_last at k = 1, 5, 10, to confirm or refute the learned judges' "wm imagined angle worse than copy_last" finding with the only trusted angle reader.
 - (b) **"-dirty" on Kaggle:** full-mode jobs write `results/*.json` into the checkout, so later jobs in the same session report git "-dirty" (e.g. `rollouts.json` shows 0382f7a-dirty). Exclude `results/` from the dirty check in `wm/repro.git_info`.
 
@@ -189,6 +195,7 @@ python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, py
 - Local `projected_30k_steps` (2h07m) is CPU at batch 4; the real projection comes from the Kaggle smoke.
 - **Phase 4 Kaggle budget:** `train_baselines` full = wm_1step 30k + pixel 30k + BC 20k (batch 256 × 4 images) + probe 10k steps in one group. The Kaggle smoke's four `projected_*` lines tell us whether it fits one 12 h session; if not, rerunning the same cell skips finished jobs and resumes the unfinished one from its last checkpoint.
 - BC smoke `val_z_std` = 0.006 (50 CPU steps). No CHECK by design; watch it on the Kaggle full run.
+- **Phase 6 watch item:** imagined success vs real outcome (smoke: cem_wm 2/3 imagined, 2 failed for real; cem_wm_1step 3/3 imagined, 3 failed). Report the gap from the `phase6` full run; a large gap means `model_error` will dominate Phase 7's failure tags.
 - **Phase 6:** the goal frame also shows the pusher at goal time, and z_g carries whatever pusher information E_wm keeps, so the cost may also pull the pusher toward its goal-time position. Known; the cost stays image-only as pre-registered.
 - **Phase 6 T4 estimates (from FLOP counts, not measured; the Kaggle smoke's timing lines replace them):** train_bc_clean ~15–30 min (as train_bc); plan_val without cem_pixel ~5–10 min; cem_pixel +10–30 min for 50 pairs; plan_sweep ~10–20 min; `phase6` full ~0.5–1.5 h.
 - **Mac only:** on import, macOS prints `objc ... Class SDL... is implemented in both cv2/.dylibs/libSDL2 and pygame/.dylibs/libSDL2` to stderr, because both OpenCV wheels bundle SDL2 on macOS. It's harmless with `SDL_VIDEODRIVER=dummy` and all tests pass. It doesn't occur on Kaggle/Colab (Linux).
