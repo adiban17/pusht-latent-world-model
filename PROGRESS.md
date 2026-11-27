@@ -1,6 +1,6 @@
 # PROGRESS
 
-**Current phase: 6 (CEM planner + validation tuning); local and Kaggle `phase6` smoke PASS → Kaggle full.** Phase 6 adds make_pairs, train_bc_clean, the CEM planner / MPC runner, plan_val and plan_sweep; its decisions are pre-registered below. Next: Aditya pushes, runs Kaggle `phase6` smoke (we read cem_pixel's timing and decide its flag), then `phase6` full, and drops `results/plan_val.json`, `results/plan_sweep.json` and `results/eval_pairs_{val,test}.json` into `results/`; then I freeze `configs/plan.yaml`. Phase 5b is **done** (Kaggle full; judge freeze decision below).
+**Current phase: 6 DONE (Kaggle full; CEM config frozen = default; BC for the test = bc_clean) → 6b (pre-registered cost_space diagnostic, below).** Next: I build `plan_cost_ablation` and smoke it locally; Aditya pushes and runs it on Kaggle (smoke → full) and drops `results/plan_cost_ablation.json` into `results/`. Then Phase 7.
 
 ## Status
 | Phase | Status | Local smoke | Kaggle smoke | Kaggle full |
@@ -12,7 +12,8 @@
 | 4 Baselines | done (`overnight`; BC = `ckpt-bc:v3`, git 2227d6f) | PASS | PASS | PASS |
 | 5 Rollout eval | Kaggle full done (adc200d); judge failed → 5b | PASS | PASS | PASS (`results/rollouts.json`) |
 | 5b Angle audit + judges | **DONE** (judges frozen, see Decisions) | PASS | PASS | PASS (`results/angle_audit.json`, `results/rollouts.json`) |
-| 6 Planner | built; Kaggle smoke PASS; cem_pixel pre-registered | PASS | PASS | pending |
+| 6 Planner | **DONE** (frozen: default; bc_selected = bc_clean) | PASS | PASS | PASS (`results/plan_val.json`, `results/plan_sweep.json`) |
+| 6b Cost-space diagnostic | pre-registered; building | – | – | – |
 | 7 Final eval | not started | – | – | – |
 | 8 Report | not started | – | – | – |
 
@@ -140,6 +141,43 @@
   - **probe_mix with an untrained/unknown summary:** eval_rollouts treats a probe_mix without `accepted: true` in its train_summary as not accepted, so every headline says "no claim: image judge not accepted".
   - **rollouts.json schema 2:** metric keys `<judge>/block_px|block_deg|pusher_px` for judges probe_v1 / probe_mix / latent; `judges` (status, accepted, test_all, grid); `angle_in_wm_latent`; `template_oracle_test`; `headline.block_px` claims; paired `<judge>/block_px_diff_wm_minus_{pixel,wm_1step,copy_last}`. NMSE, pixel MSE and p̂ are unchanged. 11 plots (3 judges × 3 metrics + NMSE + pixel MSE).
 
+- **Phase 6 results (Kaggle `phase6` full; sources `results/plan_val.json` and `results/plan_sweep.json`, git 5458942-dirty (the "-dirty" is the results/*.json written into the checkout, Phase 7 TODO (b)); `results/eval_pairs_{val,test}.json` git 5458942):** 50 val pairs, budget 40, planner seed 0. All 50 val pairs start ≥ 20 px from the goal, so position-only success (subset) = all 50 pairs. CHECKS: render alignment 0.000 (start and goal), noop 0/50.
+
+  | method | success [Wilson 95% CI, %] | position-only | median final pos px | median final angle ° | s / episode |
+  | --- | --- | --- | --- | --- | --- |
+  | bc_clean | 32/50 [50.1, 75.9] | 34/50 | 18.7 | 13.9 | 0.15 |
+  | bc | 26/50 [38.5, 65.2] | 29/50 | 19.9 | 16.4 | 0.17 |
+  | cem_pixel | 18/50 [24.1, 49.9] | 36/50 | 16.0 | 29.3 | 11.77 |
+  | cem_wm_1step | 14/50 [17.5, 41.7] | 22/50 | 25.6 | 30.1 | 0.81 |
+  | cem_wm | 13/50 [15.9, 39.6] | 32/50 | 18.5 | 27.6 | 0.81 |
+  | random | 4/50 [3.2, 18.8] | 12/50 | 49.1 | 34.4 | 0.14 |
+  | noop | 0/50 [0.0, 7.1] | 0/50 | 73.9 | 41.2 | 0.15 |
+
+  - **Pair split:** val 45 turning (|Δθ| ≥ 20°) / 5 not; test 180 / 20. Turning-pair success (of 45) / non-turning (of 5): bc_clean 30 / 2, bc 26 / 0, cem_pixel 16 / 2, cem_wm_1step 13 / 1, cem_wm 13 / 0, random 4 / 0, noop 0 / 0. Position-only, turning / non-turning: bc_clean 31 / 3, bc 29 / 0, cem_pixel 33 / 3, cem_wm_1step 21 / 1, cem_wm 32 / 0, random 11 / 1, noop 0 / 0.
+  - **Imagined vs real** (τ = 21.22, p95 over 12,324 same-episode val success pairs; terminal ‖ẑ_H − z_g‖² < τ at some step): cem_wm 45/50 imagined success, 33 of them failed for real; cem_pixel 47/50, 30 failed; cem_wm_1step 29/50, 17 failed.
+  - **Speed:** cem_wm 0.81 vs cem_pixel 11.77 s/episode. Full-run timing probe: cem_wm 0.024, cem_wm_1step 0.023, cem_pixel 0.434 s per planning call (the smoke said 0.380).
+  - **Angle among episodes that reached position (computed from plan_val.json's per-pair records; direct test of the angle-insensitivity hypothesis):** median final |angle| over episodes with position-only success: cem_wm 25.6° (n 32), cem_pixel 20.8° (36), cem_wm_1step 18.0° (22), bc_clean 12.4° (34), bc 11.6° (29), random 27.2° (12). Successes stop at < 20°, which pulls these medians down; over position-reached episodes that still *failed*: cem_wm 40.9° (n 19), cem_pixel 37.2° (18), cem_wm_1step 55.8° (8), bc 21.4° (3), bc_clean 50.1° (2), random 29.1° (8).
+  - **Sweep (cem_wm, success / position-only / median final angle ° / s per episode):** default 13 / 32 / 27.6 / 0.82; N=32 14 / 35 / 27.9 / 0.80; N=64 13 / 34 / 29.4 / 0.81; N=256 12 / 34 / 28.5 / 0.84; rounds=1 14 / 35 / 30.0 / 0.43; rounds=2 14 / 33 / 26.4 / 0.56; H=5 12 / 31 / 28.0 / 0.57; H=15 12 / 32 / 32.1 / 1.12; β=0 11 / 22 / 23.9 / 0.88.
+  - **Interpretation (hypothesis, not a measured cause):** the planner reaches block position but not angle (cem_wm: 32 position-only vs 13 full successes; 19 position-reached failures with median final angle 40.9°), consistent with Phase 5b (angle weak in the wm latent, 24.7°). The latent L2 cost is likely angle-insensitive: imagined success is mostly false (33 of 45 for cem_wm). Phase 6b tests one alternative cost.
+- **Phase 6 freeze (2026-11-27, pre-registered rule applied mechanically):** `plan_sweep` selected **default** by primary success. Default 13; best variants 14 (N=32, rounds=1, rounds=2); none reaches 13 + 3 = 16. `configs/plan.yaml`'s CEM values are unchanged; `frozen: true`. **bc_selected = bc_clean** (successes 32 vs 26), so Phase 7 tests bc_clean as the BC arm.
+- **`frozen` is hash-neutral (2026-11-27):** `wm/registry.job_config_hash` hashes a top-level `frozen` key as `False` whatever its value. So plan_val stays **1c1cfd1a332a** and plan_sweep **6453b9964314** (the hashes in the results JSONs and on the Kaggle artifacts). Nothing finished looks stale: `is_finished`, `input_hashes`, `pull_matching("results-plan-val")` and Phase 7's `bc_selected` lookup all see the same hash. Only plan.yaml has the key; `tests/test_registry_phase6b.py` asserts both hashes with `frozen` true and false, and the training hashes.
+- **Phase 6b pre-registration (2026-11-27, by Aditya, written BEFORE building or running it): one diagnostic, `cost_space`.**
+  - **Option:** `CEMConfig.cost_space = "latent"` (default, unchanged) | `"pixel"`. `configs/plan.yaml` gets no new key; the frozen default and every existing job are unchanged.
+  - **"pixel" cost:** the same structure, d_H + β Σ_{k=1}^{H−1} d_k, β = 0.1 from plan.yaml. d_k = mean over pixels and channels of w · (clip(D_wm(ẑ_k), −0.5, 0.5) − o_g)², o_g = goal frame.
+  - **Weight** w = 1 + 20 · (fg_mask AND NOT pusher_mask), from the goal image only (never the goal state):
+    - fg_mask = any channel |o_g − train mean frame| > 25/255 (the training rule, the checkpoint's own `fg_mean`).
+    - pusher_mask = pixels whose colour is a blend of a pusher colour and a scene colour with pusher share ≥ 0.25 and distance from the blend line ≤ 12 uint8 levels. Colours from gym-pusht's render code: pusher RoyalBlue (65, 105, 225) + inner `light_color` (78, 126, 255); scene white, LightGray (211, 211, 211), LightGreen (144, 238, 144), LightSlateGray (119, 136, 153) + light (143, 163, 184).
+    - Pusher pixels stay in the distance at weight 1, so the cost doesn't reward moving the pusher to its goal-time position.
+  - **Arms:** dynamics, CEM settings, seed and pairs identical; fp32 in both arms.
+  - **τ_pixel:** p95 of d(D_wm(E_wm(o_i)), o_j) over ordered same-val-episode pairs i ≠ j whose states satisfy `is_success`, weight from o_j with the same mask rule; imagined success = terminal d_H < τ_pixel.
+  - **Job `plan_cost_ablation`:** cem_wm with cost_space latent vs pixel on the same 50 val pairs, budget 40, seed 0. Reports what plan_val reports per arm, plus:
+    - median final angle over position-reached episodes (with n): the direct test of the angle-insensitivity hypothesis;
+    - imagined-vs-real per arm;
+    - paired discordant counts;
+    - mean share of fg pixels removed by the pusher mask;
+    - a debug PNG (goal | weight mask | decoded predicted frame).
+  - **Reproduction check (WARN):** `latent_arm_reproduces_plan_val` compares the latent arm with plan_val's cem_wm (expects 13/50 and identical per-pair outcomes) and reports the agreement count. Both ran fp32 (CEMPolicy has no autocast; the T4 has no TF32), so any mismatch is cuDNN nondeterminism.
+  - **Decision rule:** cost_space = pixel joins Phase 7 as an extra arm labelled **"post-hoc diagnostic, chosen on val"** only if it gets **≥ 3 more successes than the latent arm in this job**. The frozen latent default stays the headline either way. No other setting changes.
 - **Phase 5b results (Kaggle full; sources `results/angle_audit.json` (git 0382f7a) and `results/rollouts.json` (schema 2, git 0382f7a-dirty, 500 test windows); the Phase 5 `rollouts.json` is in git history at a343e14):**
   - **angle_audit:** no label bug (rerender, orientation, CoG convention, round trip all clean); verdict "labels consistent; failure = probe generalisation (memorisation)". v1 probe angle: train 13.4° vs val 84.8°. Template oracle (non-learned, true position given), 200 frames each: real 1.4° mean, wm_recon 5.6°, wm1step_recon 3.4°, pixel_1step 1.9°.
   - **probe_mix (flatten, best step 19000): NOT accepted.** Failed pre-registered checks: real angle 46.5° (gate < 15°), real block 15.5 px (gate ≤ 13.4), wm_recon pusher 117.0 px and wm1step_recon pusher 117.5 px (gate ≤ 1.5 × real 53.5 = 80.3 px). Passed: block px on every derived type and pixel_1step pusher. Test block px by frame type: real 15.5 / wm_recon 14.1 / wm1step_recon 15.7 / pixel_1step 14.5.
@@ -179,6 +217,7 @@
   - plan_val saves 3 filmstrips (real frames 1..H | decoded imagined plan of the first step | goal) of the first cem_wm val episodes.
 
 ## Phase 7 TODO
+- **BC arm = bc_clean** (`bc_selected` in `results/plan_val.json`); cost_space = pixel joins only if Phase 6b's rule says so.
 - **Seeds (pre-registered in Phase 6):** `final_eval` runs cem_pixel with planner seed 0 only; all other methods with 3 seeds.
 - (a) **Template-oracle angle on imagined frames:** a column with the template oracle (non-learned, true position given) on *imagined* frames for wm (decoded ẑ), wm_1step, pixel and copy_last at k = 1, 5, 10, to confirm or refute the learned judges' "wm imagined angle worse than copy_last" finding with the only trusted angle reader.
 - (b) **"-dirty" on Kaggle:** full-mode jobs write `results/*.json` into the checkout, so later jobs in the same session report git "-dirty" (e.g. `rollouts.json` shows 0382f7a-dirty). Exclude `results/` from the dirty check in `wm/repro.git_info`.
@@ -195,7 +234,7 @@ python 3.12.2, torch 2.15.0, gym-pusht 0.1.8, gymnasium 1.4.0, pymunk 6.11.1, py
 - Local `projected_30k_steps` (2h07m) is CPU at batch 4; the real projection comes from the Kaggle smoke.
 - **Phase 4 Kaggle budget:** `train_baselines` full = wm_1step 30k + pixel 30k + BC 20k (batch 256 × 4 images) + probe 10k steps in one group. The Kaggle smoke's four `projected_*` lines tell us whether it fits one 12 h session; if not, rerunning the same cell skips finished jobs and resumes the unfinished one from its last checkpoint.
 - BC smoke `val_z_std` = 0.006 (50 CPU steps). No CHECK by design; watch it on the Kaggle full run.
-- **Phase 6 watch item:** imagined success vs real outcome (smoke: cem_wm 2/3 imagined, 2 failed for real; cem_wm_1step 3/3 imagined, 3 failed). Report the gap from the `phase6` full run; a large gap means `model_error` will dominate Phase 7's failure tags.
+- **Imagined vs real (Phase 6 full):** cem_wm 45 imagined successes, 33 false; cem_pixel 47 / 30; cem_wm_1step 29 / 17. Expect `model_error` to dominate Phase 7's failure tags for cem_wm.
 - **Phase 6:** the goal frame also shows the pusher at goal time, and z_g carries whatever pusher information E_wm keeps, so the cost may also pull the pusher toward its goal-time position. Known; the cost stays image-only as pre-registered.
 - **Phase 6 T4 estimates (from FLOP counts, not measured; the Kaggle smoke's timing lines replace them):** train_bc_clean ~15–30 min (as train_bc); plan_val without cem_pixel ~5–10 min; cem_pixel +10–30 min for 50 pairs; plan_sweep ~10–20 min; `phase6` full ~0.5–1.5 h.
 - **Mac only:** on import, macOS prints `objc ... Class SDL... is implemented in both cv2/.dylibs/libSDL2 and pygame/.dylibs/libSDL2` to stderr, because both OpenCV wheels bundle SDL2 on macOS. It's harmless with `SDL_VIDEODRIVER=dummy` and all tests pass. It doesn't occur on Kaggle/Colab (Linux).

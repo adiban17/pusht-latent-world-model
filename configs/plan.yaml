@@ -1,7 +1,7 @@
 # CEM planner + MPC (CLAUDE.md §8) and planning evaluation (§9). Used by plan_val and plan_sweep
 # (and final_eval in Phase 7). Phase 6 freezes the `cem` block after plan_sweep (rule below).
 seed: 0                 # planner seed; episode generator = seed * 100003 + pair index
-frozen: false
+frozen: true            # Phase 6 freeze (2026-11-27): plan_sweep selected `default` (results/plan_sweep.json); hashed as false (wm/registry.py)
 budget: 40              # env steps per episode; stop at the first success
 cem:
   candidates: 128       # N; one candidate is always the current mean

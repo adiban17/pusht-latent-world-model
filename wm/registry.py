@@ -36,8 +36,12 @@ def job_config_hash(name: str, entry: dict[str, Any], cfg: dict[str, Any],
     So a job made from checkpoints (e.g. train_probe_mix from ckpt-wm) gets a new hash when one
     of those checkpoints' configs changes: it retrains or reruns, and `pull_matching` downstream
     never accepts a stale one. Jobs that need only `pusht-data` keep their old hash.
+    A top-level `frozen` key (plan.yaml, Phase 6) is hashed as False whatever its value: flipping
+    it marks the config as frozen without changing any hash (decision 2026-11-27).
     """
     inputs = input_hashes(entry, registry)
+    if "frozen" in cfg:   # status marker, not a setting: hashed as False so freezing never stales results
+        cfg = {**cfg, "frozen": False}
     payload: dict[str, Any] = {"job": name, "entry": entry, "config": cfg}
     if inputs:
         payload["inputs"] = inputs
